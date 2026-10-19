@@ -78,6 +78,7 @@ APIPage::APIPage(QWidget* parent) : QWidget(parent), ui(new Ui::APIPage)
     ui->resourceURL->setValidator(new QRegularExpressionValidator(s_validUrlRegExp, ui->resourceURL));
     ui->baseURLEntry->setValidator(new QRegularExpressionValidator(s_validUrlRegExp, ui->baseURLEntry));
     ui->legacyFMLLibsURL->setValidator(new QRegularExpressionValidator(s_validUrlRegExp, ui->legacyFMLLibsURL));
+    ui->relayURL->setValidator(new QRegularExpressionValidator(s_validUrlRegExp, ui->relayURL));
     ui->msaClientID->setValidator(new QRegularExpressionValidator(s_validMSAClientID, ui->msaClientID));
 
     ui->metaURL->setPlaceholderText(BuildConfig.META_URL);
@@ -139,6 +140,9 @@ void APIPage::loadSettings()
         ui->FallbackMRBlockedMods->setChecked(fallbackMRBlockedMods);
     }
 
+    ui->relayURL->setText(s->get("RelayURL").toString());
+    ui->relayToken->setText(s->get("RelayToken").toString());
+
     QString msaClientID = s->get("MSAClientIDOverride").toString();
     ui->msaClientID->setText(msaClientID);
     QString metaURL = s->get("MetaURLOverride").toString();
@@ -162,6 +166,11 @@ void APIPage::applySettings()
 
     s->set("PastebinType", ui->pasteTypeComboBox->currentData().toInt());
     s->set("PastebinCustomAPIBase", ui->baseURLEntry->text());
+
+    // Deliberately not upgraded from http to https like the URLs below: the manager refuses a non-loopback http relay itself.
+    s->set("RelayURL", ui->relayURL->text().trimmed());
+    s->set("RelayToken", ui->relayToken->text().trimmed());
+    APPLICATION->updateRelaySettings();
 
     QString msaClientID = ui->msaClientID->text();
     s->set("MSAClientIDOverride", msaClientID);

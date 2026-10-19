@@ -46,6 +46,7 @@
 #include "DataMigrationTask.h"
 #include "java/JavaInstallList.h"
 #include "net/PasteUpload.h"
+#include "net/RelayNetworkAccessManager.h"
 #include "tasks/Task.h"
 #include "tools/GenericProfiler.h"
 #include "ui/InstanceWindow.h"
@@ -878,6 +879,10 @@ Application::Application(int& argc, char** argv) : QApplication(argc, argv)
 
         m_settings->registerSetting("Env", "{}");
 
+        // Relay server that every network request is sent through (empty = connect directly)
+        m_settings->registerSetting("RelayURL", "");
+        m_settings->registerSetting("RelayToken", "");
+
         // Custom Microsoft Authentication Client ID
         m_settings->registerSetting("MSAClientIDOverride", "");
 
@@ -919,7 +924,8 @@ Application::Application(int& argc, char** argv) : QApplication(argc, argv)
 
     // initialize network access and proxy setup
     {
-        m_network.reset(new QNetworkAccessManager());
+        m_network.reset(new RelayNetworkAccessManager());
+        updateRelaySettings();
         QString proxyTypeStr = settings()->get("ProxyType").toString();
         QString addr = settings()->get("ProxyAddr").toString();
         int port = settings()->get("ProxyPort").value<qint16>();
@@ -1799,6 +1805,20 @@ void Application::updateProxySettings(QString proxyTypeStr, QString addr, int po
     }
     proxyDesc += QString("%1:%2").arg(proxy.hostName()).arg(proxy.port());
     qDebug() << proxyDesc;
+}
+
+void Application::updateRelaySettings()
+{
+    auto* network = qobject_cast<RelayNetworkAccessManager*>(m_network.get());
+    if (!network) {
+        return;
+    }
+    // The environment wins over the settings, so a launcher script can force a relay without touching prism.cfg.
+    auto fromEnvOr = [](const char* variable, const QString& fallback) {
+        return qEnvironmentVariableIsEmpty(variable) ? fallback : qEnvironmentVariable(variable);
+    };
+    network->configure(fromEnvOr("PRISM_RELAY_URL", settings()->get("RelayURL").toString()),
+                       fromEnvOr("PRISM_RELAY_TOKEN", settings()->get("RelayToken").toString()));
 }
 
 HttpMetaCache* Application::metacache()

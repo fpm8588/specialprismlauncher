@@ -98,6 +98,42 @@
         </widget>
        </item>
        <item>
+        <widget class="QGroupBox" name="groupBox_relay">
+         <property name="title">
+          <string>Relay Server</string>
+         </property>
+         <layout class="QVBoxLayout" name="verticalLayout_relay">
+          <item>
+           <widget class="QLabel" name="relayLabel">
+            <property name="text">
+             <string>Send all network requests through your own relay server instead of connecting to Mojang, Microsoft and the other services directly. Leave empty to connect directly. If a relay is set, requests fail rather than going out directly when the address or token is wrong.</string>
+            </property>
+            <property name="wordWrap">
+             <bool>true</bool>
+            </property>
+           </widget>
+          </item>
+          <item>
+           <widget class="QLineEdit" name="relayURL">
+            <property name="placeholderText">
+             <string>https://relay.example.com (empty = connect directly)</string>
+            </property>
+           </widget>
+          </item>
+          <item>
+           <widget class="QLineEdit" name="relayToken">
+            <property name="echoMode">
+             <enum>QLineEdit::Password</enum>
+            </property>
+            <property name="placeholderText">
+             <string>Relay token</string>
+            </property>
+           </widget>
+          </item>
+         </layout>
+        </widget>
+       </item>
+       <item>
         <widget class="QGroupBox" name="groupBox_meta">
          <property name="title">
           <string>Meta&amp;data Server</string>

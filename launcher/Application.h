@@ -147,6 +147,9 @@ class Application : public QApplication {
 
     void updateProxySettings(QString proxyTypeStr, QString addr, int port, QString user, QString password);
 
+    /// Re-read the relay settings (RelayURL / RelayToken, or PRISM_RELAY_URL / PRISM_RELAY_TOKEN) into the network manager.
+    void updateRelaySettings();
+
     QNetworkAccessManager* network();
 
     HttpMetaCache* metacache();

@@ -146,6 +146,8 @@ set(NET_SOURCES
     net/ApiUpload.h
     net/NetRequest.cpp
     net/NetRequest.h
+    net/RelayNetworkAccessManager.cpp
+    net/RelayNetworkAccessManager.h
 )
 
 # Game launch logic

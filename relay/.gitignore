@@ -1,0 +1,6 @@
+dist/
+certs/
+*.txt
+!README.txt
+prism-relay
+prism-relay.exe

@@ -41,6 +41,7 @@
 #include "minecraft/auth/AccountList.h"
 
 #include "net/NetUtils.h"
+#include "net/RelayNetworkAccessManager.h"
 #include "ui/InstanceWindow.h"
 #include "ui/dialogs/CustomMessageBox.h"
 #include "ui/dialogs/MSALoginDialog.h"
@@ -397,10 +398,13 @@ void LaunchController::launchInstance()
     if (m_actualLaunchMode == LaunchMode::Normal) {
         online_mode = "online";
 
-        // Prepend Server Status
-        const QStringList servers = { "login.microsoftonline.com", "session.minecraft.net", "textures.minecraft.net", "api.mojang.com" };
+        // Prepend Server Status. This resolves the hosts directly from this machine, which is exactly what a relay setup avoids.
+        const auto* relay = qobject_cast<RelayNetworkAccessManager*>(APPLICATION->network());
+        if (!relay || !relay->routesThroughRelay()) {
+            const QStringList servers = { "login.microsoftonline.com", "session.minecraft.net", "textures.minecraft.net", "api.mojang.com" };
 
-        m_launcher->prependStep(makeShared<PrintServers>(m_launcher, servers));
+            m_launcher->prependStep(makeShared<PrintServers>(m_launcher, servers));
+        }
     } else {
         online_mode = m_actualLaunchMode == LaunchMode::Demo ? "demo" : "offline";
     }
