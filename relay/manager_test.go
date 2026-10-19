@@ -1,0 +1,394 @@
+package main
+
+import (
+	"context"
+	"crypto/ecdsa"
+	"crypto/elliptic"
+	"crypto/rand"
+	"crypto/tls"
+	"crypto/x509"
+	"crypto/x509/pkix"
+	"encoding/pem"
+	"io"
+	"math/big"
+	"net"
+	"net/http"
+	"net/http/httptest"
+	"os"
+	"path/filepath"
+	"strings"
+	"testing"
+	"time"
+)
+
+func freeAddr(t *testing.T) string {
+	t.Helper()
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer ln.Close()
+	return ln.Addr().String()
+}
+
+func newTestManager(t *testing.T) *Manager {
+	t.Helper()
+	m, err := NewManager(t.TempDir(), "test", func(c *Config) { c.AllowPrivate = true })
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(m.Stop)
+	return m
+}
+
+func TestStoreCreatesSecretsAndPersists(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "sub", "config.json")
+	st, err := OpenStore(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	s := st.Get()
+	if len(s.Token) < MinTokenLen || len(s.AdminKey) < MinTokenLen {
+		t.Errorf("secrets not generated: token %d chars, admin key %d chars", len(s.Token), len(s.AdminKey))
+	}
+	if s.TLSMode != TLSAuto || s.AdminAddr != DefaultAdminAddr {
+		t.Errorf("defaults wrong: %+v", s)
+	}
+	if _, err := st.Update(func(s *Settings) {
+		s.Domain = "Relay.Example.COM"
+		s.ExtraHosts = []string{"B.example.org", "a.example.org", "b.example.org", " "}
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	again, err := OpenStore(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	g := again.Get()
+	if g.Token != s.Token || g.AdminKey != s.AdminKey {
+		t.Error("secrets changed across reload")
+	}
+	if g.Domain != "relay.example.com" {
+		t.Errorf("domain = %q, want lowercased", g.Domain)
+	}
+	if strings.Join(g.ExtraHosts, ",") != "a.example.org,b.example.org" {
+		t.Errorf("extra hosts = %v, want sorted and de-duplicated", g.ExtraHosts)
+	}
+	if fi, _ := os.Stat(path); fi.Mode().Perm()&0o077 != 0 && filepath.Separator == '/' {
+		t.Errorf("config file is readable by others: %v", fi.Mode())
+	}
+}
+
+func TestStoreRejectsInvalidSettingsAndKeepsOldOnes(t *testing.T) {
+	st, _ := OpenStore(filepath.Join(t.TempDir(), "config.json"))
+	bad := map[string]func(*Settings){
+		"domain with scheme": func(s *Settings) { s.Domain = "https://relay.example.com" },
+		"domain is an IP":    func(s *Settings) { s.Domain = "203.0.113.5" },
+		"bad mode":           func(s *Settings) { s.TLSMode = "magic" },
+		"bad listen":         func(s *Settings) { s.Listen = "443" },
+		"port too big":       func(s *Settings) { s.Listen = ":70000" },
+		"bad extra host":     func(s *Settings) { s.ExtraHosts = []string{"not a host"} },
+		"short token":        func(s *Settings) { s.Token = "short" },
+		"public admin addr":  func(s *Settings) { s.AdminAddr = "0.0.0.0:9777" },
+	}
+	for name, fn := range bad {
+		before := st.Get()
+		if _, err := st.Update(fn); err == nil {
+			t.Errorf("%s: expected an error", name)
+		}
+		if got := st.Get(); got.Domain != before.Domain || got.TLSMode != before.TLSMode || got.Token != before.Token {
+			t.Errorf("%s: settings changed despite the error", name)
+		}
+	}
+}
+
+func TestPrismURLAndPorts(t *testing.T) {
+	cases := []struct {
+		s    Settings
+		url  string
+		port int
+	}{
+		{Settings{TLSMode: TLSAuto, Domain: "relay.example.com"}, "https://relay.example.com", 443},
+		{Settings{TLSMode: TLSAuto}, "", 443},
+		{Settings{TLSMode: TLSFiles, Domain: "relay.example.com"}, "https://relay.example.com:8443", 8443},
+		{Settings{TLSMode: TLSFiles, Domain: "relay.example.com", Listen: ":443"}, "https://relay.example.com", 443},
+		{Settings{TLSMode: TLSPlain}, "http://127.0.0.1:8080", 8080},
+		{Settings{TLSMode: TLSPlain, Listen: "0.0.0.0:9000"}, "http://127.0.0.1:9000", 9000},
+	}
+	for _, c := range cases {
+		if got := c.s.PrismURL(); got != c.url {
+			t.Errorf("%+v: PrismURL = %q, want %q", c.s, got, c.url)
+		}
+		if got := c.s.ListenPort(); got != c.port {
+			t.Errorf("%+v: ListenPort = %d, want %d", c.s, got, c.port)
+		}
+	}
+}
+
+func TestEffectiveAllowlist(t *testing.T) {
+	s := Settings{ExtraHosts: []string{"cdn.example.org"}, DisabledHosts: []string{"api.curseforge.com"}}
+	a := s.Allowlist()
+	if !a.Match("libraries.minecraft.net") || !a.Match("cdn.example.org") {
+		t.Error("built-in and extra hosts must both be allowed")
+	}
+	if a.Match("api.curseforge.com") {
+		t.Error("a disabled built-in host must not be allowed")
+	}
+}
+
+func startPlain(t *testing.T, m *Manager) string {
+	t.Helper()
+	addr := freeAddr(t)
+	if _, err := m.Store.Update(func(s *Settings) { s.TLSMode, s.Listen = TLSPlain, addr }); err != nil {
+		t.Fatal(err)
+	}
+	if err := m.Start(); err != nil {
+		t.Fatal(err)
+	}
+	return addr
+}
+
+func TestManagerStartServeStop(t *testing.T) {
+	m := newTestManager(t)
+	if m.Status().State != StateStopped {
+		t.Fatal("new manager should be stopped")
+	}
+	addr := startPlain(t, m)
+	if st := m.Status(); st.State != StateRunning || st.Addr != addr {
+		t.Fatalf("status = %+v", st)
+	}
+
+	req, _ := http.NewRequest("GET", "http://"+addr+"/healthz", nil)
+	req.Header.Set(TokenHeader, m.Store.Get().Token)
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	body, _ := io.ReadAll(resp.Body)
+	resp.Body.Close()
+	if resp.StatusCode != 200 || strings.TrimSpace(string(body)) != "ok" {
+		t.Fatalf("healthz: %d %q", resp.StatusCode, body)
+	}
+
+	m.Stop()
+	if m.Status().State != StateStopped {
+		t.Error("state should be stopped after Stop")
+	}
+	if _, err := http.DefaultClient.Get("http://" + addr + "/healthz"); err == nil {
+		t.Error("the port should be closed after Stop")
+	}
+	if err := m.Start(); err != nil {
+		t.Errorf("restart after stop: %v", err)
+	}
+}
+
+func TestStartExplainsProblems(t *testing.T) {
+	m := newTestManager(t)
+
+	// automatic mode without a domain
+	if err := m.Start(); err == nil || !strings.Contains(err.Error(), "domain") {
+		t.Errorf("auto mode without domain: %v", err)
+	}
+	if st := m.Status(); st.State != StateError || st.Error == "" {
+		t.Errorf("status after failed start = %+v", st)
+	}
+
+	// port already taken
+	busy, _ := net.Listen("tcp", "127.0.0.1:0")
+	defer busy.Close()
+	m.Store.Update(func(s *Settings) { s.TLSMode, s.Listen = TLSPlain, busy.Addr().String() })
+	if err := m.Start(); err == nil || !strings.Contains(err.Error(), "already in use") {
+		t.Errorf("busy port: %v", err)
+	}
+
+	// certificate files that do not exist
+	m.Store.Update(func(s *Settings) {
+		s.TLSMode, s.Listen, s.CertFile, s.KeyFile = TLSFiles, freeAddr(t), "nope.pem", "nope.key"
+	})
+	if err := m.Start(); err == nil || !strings.Contains(err.Error(), "certificate") {
+		t.Errorf("missing cert files: %v", err)
+	}
+}
+
+func TestRestartNeededAfterListenerSettingsChange(t *testing.T) {
+	m := newTestManager(t)
+	startPlain(t, m)
+	if m.Status().RestartNeeded {
+		t.Error("no restart needed right after start")
+	}
+	m.Store.Update(func(s *Settings) { s.ExtraHosts = []string{"cdn.example.org"} })
+	m.Apply()
+	if m.Status().RestartNeeded {
+		t.Error("changing the allowlist applies live; no restart needed")
+	}
+	m.Store.Update(func(s *Settings) { s.Listen = freeAddr(t) })
+	if !m.Status().RestartNeeded {
+		t.Error("changing the port needs a restart")
+	}
+	if err := m.Restart(); err != nil {
+		t.Fatal(err)
+	}
+	if m.Status().RestartNeeded {
+		t.Error("restart should clear the flag")
+	}
+}
+
+func selfSignedFiles(t *testing.T, dir string) (certPath, keyPath string) {
+	t.Helper()
+	key, _ := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	tpl := &x509.Certificate{
+		SerialNumber: big.NewInt(1), Subject: pkix.Name{CommonName: "relay.test"},
+		DNSNames: []string{"relay.test"}, IPAddresses: []net.IP{net.ParseIP("127.0.0.1")},
+		NotBefore: time.Now().Add(-time.Hour), NotAfter: time.Now().Add(48 * time.Hour),
+		KeyUsage: x509.KeyUsageDigitalSignature, ExtKeyUsage: []x509.ExtKeyUsage{x509.ExtKeyUsageServerAuth},
+	}
+	der, _ := x509.CreateCertificate(rand.Reader, tpl, tpl, &key.PublicKey, key)
+	kb, _ := x509.MarshalECPrivateKey(key)
+	certPath, keyPath = filepath.Join(dir, "cert.pem"), filepath.Join(dir, "key.pem")
+	os.WriteFile(certPath, pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: der}), 0o600)
+	os.WriteFile(keyPath, pem.EncodeToMemory(&pem.Block{Type: "EC PRIVATE KEY", Bytes: kb}), 0o600)
+	return
+}
+
+func TestTLSWithOwnCertificateFiles(t *testing.T) {
+	m := newTestManager(t)
+	certPath, keyPath := selfSignedFiles(t, t.TempDir())
+	addr := freeAddr(t)
+	if _, err := m.Store.Update(func(s *Settings) {
+		s.TLSMode, s.Listen, s.CertFile, s.KeyFile, s.Domain = TLSFiles, addr, certPath, keyPath, "relay.test"
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if err := m.Start(); err != nil {
+		t.Fatal(err)
+	}
+
+	client := &http.Client{Transport: &http.Transport{TLSClientConfig: &tls.Config{InsecureSkipVerify: true}}}
+	req, _ := http.NewRequest("GET", "https://"+addr+"/healthz", nil)
+	req.Header.Set(TokenHeader, m.Store.Get().Token)
+	resp, err := client.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	resp.Body.Close()
+	if resp.StatusCode != 200 || resp.TLS == nil {
+		t.Fatalf("status %d, tls %v", resp.StatusCode, resp.TLS != nil)
+	}
+
+	info, err := m.CheckCertificate()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if info.Subject != "relay.test" || !info.NotAfter.After(time.Now()) {
+		t.Errorf("cert info = %+v", info)
+	}
+}
+
+func TestSelfTestReportsReachableAndUnreachable(t *testing.T) {
+	up := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/err" {
+			http.Error(w, "nope", 503)
+			return
+		}
+		io.WriteString(w, "hi")
+	}))
+	defer up.Close()
+	dead := freeAddr(t)
+
+	m := newTestManager(t)
+	m.probes = []probeTarget{
+		{"up", up.URL + "/"},
+		{"server error still counts as reachable", up.URL + "/err"},
+		{"nothing listening", "http://" + dead + "/"},
+	}
+	res := m.SelfTest(context.Background())
+	if !res[0].OK || res[0].Status != 200 {
+		t.Errorf("up: %+v", res[0])
+	}
+	if !res[1].OK || res[1].Status != 503 {
+		t.Errorf("503: %+v", res[1])
+	}
+	if res[2].OK || res[2].Error == "" {
+		t.Errorf("dead: %+v", res[2])
+	}
+}
+
+func TestEventsAndStatsFlowThroughTheManager(t *testing.T) {
+	m := newTestManager(t)
+	m.record(Event{Kind: KindOK, Host: "libraries.minecraft.net", Status: 200, Bytes: 1000})
+	m.record(Event{Kind: KindOK, Host: "libraries.minecraft.net", Status: 200, Bytes: 500})
+	m.record(Event{Kind: KindError, Host: "api.modrinth.com"})
+	m.record(Event{Kind: KindDeny, Host: "cdn.example.org"})
+	m.record(Event{Kind: KindAuth})
+
+	snap := m.Stats.Snapshot()
+	if snap.Requests != 3 || snap.BytesDown != 1500 || snap.Errors != 1 || snap.Denied != 1 || snap.AuthFails != 1 {
+		t.Errorf("snapshot = %+v", snap)
+	}
+	if snap.Hosts[0].Host != "libraries.minecraft.net" || snap.Hosts[0].Requests != 2 {
+		t.Errorf("hosts not sorted by traffic: %+v", snap.Hosts)
+	}
+	if len(snap.DeniedFor) != 1 || snap.DeniedFor[0].Host != "cdn.example.org" {
+		t.Errorf("denied hosts = %+v", snap.DeniedFor)
+	}
+	m.Stats.Forget("cdn.example.org")
+	if len(m.Stats.Snapshot().DeniedFor) != 0 {
+		t.Error("Forget should clear a denied host")
+	}
+
+	ev, last := m.Events.Since(0, 100)
+	if len(ev) != 5 || last != 5 {
+		t.Errorf("events: %d, last %d", len(ev), last)
+	}
+	ev, _ = m.Events.Since(3, 100)
+	if len(ev) != 2 || ev[0].Seq != 4 {
+		t.Errorf("Since(3) = %+v", ev)
+	}
+}
+
+func TestEventLogKeepsOnlyTheNewest(t *testing.T) {
+	l := NewEventLog(3, nil)
+	for i := 0; i < 10; i++ {
+		l.Add(Event{Kind: KindOK})
+	}
+	ev, last := l.Since(0, 100)
+	if len(ev) != 3 || ev[0].Seq != 8 || last != 10 {
+		t.Errorf("got %d events starting at %d, last %d", len(ev), ev[0].Seq, last)
+	}
+}
+
+func TestRotatingFileRollsOver(t *testing.T) {
+	p := filepath.Join(t.TempDir(), "relay.log")
+	f, err := NewRotatingFile(p, 100)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer f.Close()
+	for i := 0; i < 20; i++ {
+		f.Write([]byte("0123456789\n"))
+	}
+	if !fileExists(p + ".1") {
+		t.Error("expected a rolled-over file")
+	}
+	if fi, _ := os.Stat(p); fi.Size() > 100 {
+		t.Errorf("current log is %d bytes, over the limit", fi.Size())
+	}
+}
+
+func TestHostFromInput(t *testing.T) {
+	cases := map[string]string{
+		"https://libraries.minecraft.net/a/b.jar": "libraries.minecraft.net",
+		"Libraries.Minecraft.net/x":               "libraries.minecraft.net",
+		"cdn.example.org":                         "cdn.example.org",
+		"https://example.org:8443/x":              "example.org:8443",
+		"https://example.org:443/x":               "example.org",
+		"":                                        "",
+		"   ":                                     "",
+	}
+	for in, want := range cases {
+		if got := hostFromInput(in); got != want {
+			t.Errorf("hostFromInput(%q) = %q, want %q", in, got, want)
+		}
+	}
+}

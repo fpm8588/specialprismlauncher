@@ -7,12 +7,12 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"log"
 	"net"
 	"net/http"
 	"net/url"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"syscall"
 	"time"
 )
@@ -23,6 +23,8 @@ const (
 	RoutePrefix = "/r/"
 	// TokenHeader carries the shared secret. It is never forwarded upstream.
 	TokenHeader = "X-Relay-Token"
+	// MinTokenLen is the shortest token the relay accepts.
+	MinTokenLen = 24
 
 	maxAuthFailures = 10
 	authLockout     = 15 * time.Minute
@@ -36,22 +38,21 @@ type Config struct {
 	AllowPrivate bool   // allow upstream IPs in private ranges; tests only
 	MaxBody      int64  // max request body accepted from the client
 	MaxRedirects int
-	Logger       *log.Logger
+	OnEvent      func(Event) // called for everything the relay does; may be nil
 }
 
-// Server is an authenticated, allowlisted HTTP relay.
+// Server is an authenticated, allowlisted HTTP relay. The token and the
+// allowlist can be replaced while it is serving.
 type Server struct {
-	cfg       Config
-	tokenHash [sha256.Size]byte
-	client    *http.Client
-	limiter   *authLimiter
+	cfg     Config
+	token   atomic.Pointer[[sha256.Size]byte]
+	allow   atomic.Pointer[Allowlist]
+	client  *http.Client
+	limiter *authLimiter
 }
 
 // NewServer validates cfg and builds a Server.
 func NewServer(cfg Config) (*Server, error) {
-	if len(cfg.Token) < 16 {
-		return nil, errors.New("token must be at least 16 characters")
-	}
 	if cfg.Allow == nil {
 		return nil, errors.New("allowlist is required")
 	}
@@ -64,15 +65,12 @@ func NewServer(cfg Config) (*Server, error) {
 	if cfg.MaxRedirects <= 0 {
 		cfg.MaxRedirects = 8
 	}
-	if cfg.Logger == nil {
-		cfg.Logger = log.Default()
-	}
 
-	s := &Server{
-		cfg:       cfg,
-		tokenHash: sha256.Sum256([]byte(cfg.Token)),
-		limiter:   newAuthLimiter(maxAuthFailures, authLockout),
+	s := &Server{cfg: cfg, limiter: newAuthLimiter(maxAuthFailures, authLockout)}
+	if err := s.SetToken(cfg.Token); err != nil {
+		return nil, err
 	}
+	s.SetAllowlist(cfg.Allow)
 
 	dialer := &net.Dialer{Timeout: 15 * time.Second, KeepAlive: 30 * time.Second}
 	if !cfg.AllowPrivate {
@@ -97,17 +95,42 @@ func NewServer(cfg Config) (*Server, error) {
 	return s, nil
 }
 
+// SetToken replaces the shared secret. Existing connections are not affected,
+// but new requests must present the new token.
+func (s *Server) SetToken(token string) error {
+	if len(token) < MinTokenLen {
+		return fmt.Errorf("token must be at least %d characters", MinTokenLen)
+	}
+	h := sha256.Sum256([]byte(token))
+	s.token.Store(&h)
+	return nil
+}
+
+// SetAllowlist replaces the set of upstream hosts the relay may contact.
+func (s *Server) SetAllowlist(a *Allowlist) { s.allow.Store(a) }
+
+// Client returns the HTTP client the relay uses toward upstream hosts (for diagnostics).
+func (s *Server) Client() *http.Client { return s.client }
+
+func (s *Server) emit(e Event) {
+	if s.cfg.OnEvent != nil {
+		s.cfg.OnEvent(e)
+	}
+}
+
 // ServeHTTP implements http.Handler.
 func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	start := time.Now()
 	ip := clientIP(r)
 
 	if s.limiter.locked(ip) {
+		s.emit(Event{Kind: KindLocked, Client: ip, Note: "too many wrong tokens"})
 		http.Error(w, "too many failed attempts", http.StatusTooManyRequests)
 		return
 	}
 	if !s.authorized(r) {
 		s.limiter.fail(ip)
+		s.emit(Event{Kind: KindAuth, Method: r.Method, Client: ip, Note: "missing or wrong token"})
 		http.Error(w, "unauthorized", http.StatusUnauthorized)
 		return
 	}
@@ -120,17 +143,19 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 
 	host, rest, ok := splitRoute(r.URL.EscapedPath())
 	if !ok {
+		s.emit(Event{Kind: KindBad, Method: r.Method, Path: r.URL.Path, Client: ip, Note: "bad route"})
 		http.Error(w, "bad route: expected "+RoutePrefix+"<host>/<path>", http.StatusBadRequest)
 		return
 	}
-	if !s.cfg.Allow.Match(host) {
-		s.cfg.Logger.Printf("DENY  %s %s (host not on allowlist)", r.Method, host)
-		http.Error(w, "relay: host not allowed: "+host+" (add it with -allow or -allow-file)", http.StatusForbidden)
+	if !s.allow.Load().Match(host) {
+		s.emit(Event{Kind: KindDeny, Method: r.Method, Host: host, Path: rest, Client: ip, Note: "host not on allowlist"})
+		http.Error(w, "relay: host not allowed: "+host+" (add it on the Allowed hosts tab)", http.StatusForbidden)
 		return
 	}
 
 	target, err := url.Parse(s.cfg.Scheme + "://" + host + rest)
 	if err != nil || !strings.EqualFold(target.Host, host) {
+		s.emit(Event{Kind: KindBad, Method: r.Method, Host: host, Client: ip, Note: "bad upstream url"})
 		http.Error(w, "bad upstream url", http.StatusBadRequest)
 		return
 	}
@@ -150,7 +175,8 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 
 	resp, err := s.client.Do(req)
 	if err != nil {
-		s.cfg.Logger.Printf("ERR   %s %s%s: %v", r.Method, host, rest, err)
+		s.emit(Event{Kind: KindError, Method: r.Method, Host: host, Path: rest, Client: ip,
+			Millis: time.Since(start).Milliseconds(), Note: upstreamErrorText(err)})
 		http.Error(w, "relay: upstream error: "+upstreamErrorText(err), http.StatusBadGateway)
 		return
 	}
@@ -160,17 +186,18 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(resp.StatusCode)
 	n, copyErr := io.Copy(w, resp.Body)
 
-	status := fmt.Sprintf("%d", resp.StatusCode)
+	ev := Event{Kind: KindOK, Method: r.Method, Host: host, Path: rest, Status: resp.StatusCode, Bytes: n,
+		Millis: time.Since(start).Milliseconds(), Client: ip}
 	if copyErr != nil {
-		status += " (copy aborted: " + copyErr.Error() + ")"
+		ev.Note = "copy aborted: " + copyErr.Error()
 	}
-	// The query string is deliberately not logged: it can carry tokens.
-	s.cfg.Logger.Printf("OK    %s %s%s -> %s %dB %s", r.Method, host, rest, status, n, time.Since(start).Round(time.Millisecond))
+	// The query string is deliberately not part of the event: it can carry tokens.
+	s.emit(ev)
 }
 
 func (s *Server) authorized(r *http.Request) bool {
 	got := sha256.Sum256([]byte(r.Header.Get(TokenHeader)))
-	return subtle.ConstantTimeCompare(got[:], s.tokenHash[:]) == 1
+	return subtle.ConstantTimeCompare(got[:], s.token.Load()[:]) == 1
 }
 
 // checkRedirect follows redirects on the relay side so the client never sees
@@ -182,7 +209,7 @@ func (s *Server) checkRedirect(req *http.Request, via []*http.Request) error {
 	if req.URL.Scheme != s.cfg.Scheme {
 		return fmt.Errorf("redirect to %s:// is not allowed", req.URL.Scheme)
 	}
-	if !s.cfg.Allow.Match(req.URL.Host) {
+	if !s.allow.Load().Match(req.URL.Host) {
 		return fmt.Errorf("redirect to host %q which is not on the allowlist", req.URL.Host)
 	}
 	return nil

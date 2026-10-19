@@ -1,0 +1,84 @@
+name: Build macOS app (home relay)
+
+# Builds only the macOS app, reusing upstream's setup and packaging steps, and produces a signed
+# (ad-hoc) "Prism Launcher.app" as a downloadable zip and disk image.
+#
+# Run it from the Actions tab: "Build macOS app (home relay)" -> Run workflow.
+
+on:
+  workflow_dispatch:
+    inputs:
+      build-type:
+        description: Release is faster to run; Debug is quicker to build
+        type: choice
+        options:
+          - Release
+          - Debug
+        default: Release
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions: {}
+
+jobs:
+  macos:
+    name: Build (macOS universal)
+
+    permissions:
+      contents: read
+      # Required for the vcpkg binary cache (used for Debug builds)
+      packages: write
+
+    runs-on: macos-26
+
+    env:
+      ARTIFACT_NAME: macOS-Qt6
+      BUILD_PLATFORM: home-relay
+      BUILD_TYPE: ${{ inputs.build-type || 'Release' }}
+      CMAKE_PRESET: macos_universal
+      MACOSX_DEPLOYMENT_TARGET: "12.0"
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+        with:
+          submodules: true
+
+      - name: Setup dependencies
+        id: setup-dependencies
+        uses: ./.github/actions/setup-dependencies
+        with:
+          build-type: ${{ env.BUILD_TYPE }}
+          artifact-name: macOS
+          qt-version: 6.9.3
+
+      # The two MACOSX_SPARKLE_* values are what switch Sparkle, the macOS auto-updater, on. Emptying
+      # them removes it: it would otherwise contact prismlauncher.org directly (bypassing the relay)
+      # and offer to replace this fork with the stock launcher.
+      - name: Configure project
+        run: |
+          cmake --preset "$CMAKE_PRESET" \
+            -DMACOSX_SPARKLE_UPDATE_FEED_URL= \
+            -DMACOSX_SPARKLE_UPDATE_PUBLIC_KEY=
+
+      - name: Run build
+        run: |
+          cmake --build --preset "$CMAKE_PRESET" --config "$BUILD_TYPE"
+
+      - name: Run tests
+        run: |
+          ctest --preset "$CMAKE_PRESET" --build-config "$BUILD_TYPE"
+
+      - name: Get short version
+        id: short-version
+        run: |
+          echo "version=$(git rev-parse --short HEAD)" >> "$GITHUB_OUTPUT"
+
+      - name: Package (macOS)
+        uses: ./.github/actions/package/macos
+        with:
+          version: ${{ steps.short-version.outputs.version }}
+          build-type: ${{ steps.setup-dependencies.outputs.build-type }}
+          artifact-name: macOS

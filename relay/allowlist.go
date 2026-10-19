@@ -100,21 +100,63 @@ func (a *Allowlist) Add(entry string) {
 
 // Match reports whether host (optionally with ":port") is allowed.
 func (a *Allowlist) Match(host string) bool {
+	_, ok := a.Rule(host)
+	return ok
+}
+
+// Rule returns the allowlist entry that permits host, if any.
+func (a *Allowlist) Rule(host string) (string, bool) {
 	host = normalizeHost(host)
 	if host == "" {
-		return false
+		return "", false
 	}
 	if _, ok := a.exact[host]; ok {
-		return true
+		return host, true
 	}
 	for _, s := range a.suffixes {
 		// The wildcard applies to the host name; compare without a port so
 		// "*.example.com" matches "a.example.com" but not "a.example.com:8080".
 		if strings.HasSuffix(host, s) && !strings.Contains(host, ":") {
-			return true
+			return "*" + s, true
 		}
 	}
-	return false
+	return "", false
+}
+
+// ValidEntry reports whether e is a well-formed allowlist entry: a host name
+// (optionally "*." prefixed, optionally with ":port").
+func ValidEntry(e string) bool {
+	e = normalizeHost(e)
+	e = strings.TrimPrefix(e, "*.")
+	host, port, hasPort := strings.Cut(e, ":")
+	if hasPort {
+		if port == "" || len(port) > 5 {
+			return false
+		}
+		for _, c := range port {
+			if c < '0' || c > '9' {
+				return false
+			}
+		}
+	}
+	return validHostname(host)
+}
+
+func validHostname(h string) bool {
+	if h == "" || len(h) > 253 || !strings.Contains(h, ".") {
+		return false
+	}
+	for _, label := range strings.Split(h, ".") {
+		if label == "" || len(label) > 63 || label[0] == '-' || label[len(label)-1] == '-' {
+			return false
+		}
+		for _, c := range label {
+			if !(c >= 'a' && c <= 'z' || c >= '0' && c <= '9' || c == '-') {
+				return false
+			}
+		}
+	}
+	return true
 }
 
 // ReadEntries parses a host list: one entry per line, '#' starts a comment.

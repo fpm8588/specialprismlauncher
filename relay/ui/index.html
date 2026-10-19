@@ -1,0 +1,551 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Prism Relay</title>
+<link rel="icon" href="data:,">
+<style>
+  :root {
+    --bg: #f5f6f8; --surface: #ffffff; --line: #dfe3e8; --text: #1b1f24; --muted: #5d6671;
+    --accent: #2457d6; --accent-ink: #ffffff; --ok: #1a7f37; --ok-bg: #dcf5e3;
+    --warn: #8a5a00; --warn-bg: #fff1cc; --bad: #b42318; --bad-bg: #fde4e1; --code: #eef0f3;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg: #14171b; --surface: #1d2127; --line: #303640; --text: #e8eaed; --muted: #9aa4b0;
+      --accent: #6e9bff; --accent-ink: #0b1220; --ok: #5fd07e; --ok-bg: #173523;
+      --warn: #f0c35a; --warn-bg: #3a2f10; --bad: #ff8b7e; --bad-bg: #40191a; --code: #262b33;
+    }
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--bg); color: var(--text); font: 15px/1.5 system-ui, -apple-system, "Segoe UI", sans-serif; }
+  header { background: var(--surface); border-bottom: 1px solid var(--line); position: sticky; top: 0; z-index: 5; }
+  .bar { max-width: 1040px; margin: 0 auto; padding: 12px 20px; display: flex; align-items: center; gap: 14px; flex-wrap: wrap; }
+  .bar h1 { font-size: 17px; margin: 0; font-weight: 650; }
+  .pill { display: inline-flex; align-items: center; gap: 6px; padding: 2px 10px; border-radius: 999px; font-size: 13px; font-weight: 600; }
+  .pill::before { content: ""; width: 8px; height: 8px; border-radius: 50%; background: currentColor; }
+  .pill.running { color: var(--ok); background: var(--ok-bg); }
+  .pill.stopped { color: var(--muted); background: var(--code); }
+  .pill.error { color: var(--bad); background: var(--bad-bg); }
+  .spacer { flex: 1; }
+  nav { max-width: 1040px; margin: 0 auto; padding: 0 12px; display: flex; gap: 2px; overflow-x: auto; }
+  nav button { background: none; border: 0; border-bottom: 3px solid transparent; padding: 10px 14px; font: inherit; color: var(--muted); cursor: pointer; white-space: nowrap; border-radius: 0; }
+  nav button[aria-selected="true"] { color: var(--text); border-bottom-color: var(--accent); font-weight: 600; }
+  nav button:hover { color: var(--text); }
+  nav .badge { background: var(--bad); color: #fff; border-radius: 999px; font-size: 11px; padding: 0 6px; margin-left: 6px; }
+  main { max-width: 1040px; margin: 0 auto; padding: 20px; }
+  section[hidden] { display: none; }
+  .card { background: var(--surface); border: 1px solid var(--line); border-radius: 10px; padding: 16px 18px; margin-bottom: 16px; }
+  .card h2 { font-size: 15px; margin: 0 0 10px; }
+  .card h3 { font-size: 14px; margin: 14px 0 6px; }
+  .muted { color: var(--muted); }
+  .small { font-size: 13px; }
+  .grid { display: grid; gap: 12px; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); }
+  .stat { background: var(--bg); border-radius: 8px; padding: 10px 12px; }
+  .stat b { display: block; font-size: 22px; font-variant-numeric: tabular-nums; }
+  .stat span { color: var(--muted); font-size: 13px; }
+  button, .btn { font: inherit; padding: 6px 14px; border-radius: 7px; border: 1px solid var(--line); background: var(--surface); color: var(--text); cursor: pointer; }
+  button:hover:not(:disabled) { border-color: var(--accent); }
+  button:disabled { opacity: .55; cursor: default; }
+  button.primary { background: var(--accent); color: var(--accent-ink); border-color: var(--accent); font-weight: 600; }
+  button.danger { color: var(--bad); }
+  button.link { border: 0; background: none; color: var(--accent); padding: 0 4px; }
+  input[type=text], input[type=search], select { font: inherit; padding: 6px 10px; border: 1px solid var(--line); border-radius: 7px; background: var(--bg); color: var(--text); width: 100%; }
+  input:focus-visible, button:focus-visible, select:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+  label { display: block; font-weight: 600; margin: 12px 0 4px; }
+  .row { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
+  .row > input[type=text], .row > input[type=search] { flex: 1; min-width: 180px; }
+  code, .mono { font-family: ui-monospace, "Cascadia Mono", Consolas, monospace; font-size: 13px; }
+  pre.code { background: var(--code); border-radius: 8px; padding: 10px 12px; overflow-x: auto; margin: 6px 0; white-space: pre-wrap; word-break: break-all; }
+  .callout { border-radius: 8px; padding: 10px 14px; margin-bottom: 14px; }
+  .callout.warn { background: var(--warn-bg); color: var(--warn); }
+  .callout.bad { background: var(--bad-bg); color: var(--bad); }
+  .callout.ok { background: var(--ok-bg); color: var(--ok); }
+  table { width: 100%; border-collapse: collapse; }
+  th, td { text-align: left; padding: 6px 8px; border-bottom: 1px solid var(--line); vertical-align: top; }
+  th { color: var(--muted); font-weight: 600; font-size: 13px; }
+  td.num, th.num { text-align: right; font-variant-numeric: tabular-nums; white-space: nowrap; }
+  .tag { display: inline-block; padding: 0 8px; border-radius: 999px; font-size: 12px; font-weight: 600; }
+  .tag.ok { background: var(--ok-bg); color: var(--ok); }
+  .tag.warn { background: var(--warn-bg); color: var(--warn); }
+  .tag.bad { background: var(--bad-bg); color: var(--bad); }
+  .tag.info { background: var(--code); color: var(--muted); }
+  ol.steps { list-style: none; padding: 0; margin: 0; counter-reset: s; }
+  ol.steps li { counter-increment: s; display: flex; gap: 12px; padding: 9px 0; border-bottom: 1px solid var(--line); }
+  ol.steps li:last-child { border-bottom: 0; }
+  ol.steps li::before { content: counter(s); flex: none; width: 24px; height: 24px; border-radius: 50%; background: var(--code); display: grid; place-items: center; font-size: 13px; font-weight: 600; }
+  ol.steps li.done::before { content: "\2713"; background: var(--ok-bg); color: var(--ok); }
+  ol.steps .what { flex: 1; }
+  ol.steps .what b { display: block; }
+  .toast { position: fixed; right: 18px; bottom: 18px; max-width: 420px; padding: 10px 14px; border-radius: 8px; background: var(--text); color: var(--bg); box-shadow: 0 6px 24px rgba(0,0,0,.25); z-index: 20; }
+  .toast.bad { background: var(--bad); color: #fff; }
+  .scroll { max-height: 520px; overflow: auto; }
+  .host-list { columns: 2 280px; font-size: 13px; }
+  .host-list label { font-weight: 400; margin: 0; display: flex; gap: 8px; align-items: center; padding: 2px 0; }
+  .host-list input { width: auto; }
+  fieldset { border: 0; padding: 0; margin: 0; }
+  .radio { display: flex; gap: 10px; align-items: flex-start; padding: 8px 0; font-weight: 400; margin: 0; }
+  .radio input { margin-top: 5px; width: auto; }
+  .radio b { display: block; }
+</style>
+</head>
+<body>
+<header>
+  <div class="bar">
+    <h1>Prism Relay</h1>
+    <span id="pill" class="pill stopped">Stopped</span>
+    <span id="barInfo" class="muted small"></span>
+    <span class="spacer"></span>
+    <button id="btnStart" class="primary">Start relay</button>
+    <button id="btnStop" hidden>Stop</button>
+  </div>
+  <nav role="tablist" aria-label="Sections" id="tabs"></nav>
+</header>
+<main>
+  <div id="banner"></div>
+
+  <!-- ===== Overview ===== -->
+  <section id="tab-overview" role="tabpanel">
+    <div class="card">
+      <h2>Setup checklist</h2>
+      <ol class="steps" id="steps"></ol>
+    </div>
+    <div class="card">
+      <h2>Activity since <span id="statsSince"></span> <button class="link small" id="btnResetStats">reset</button></h2>
+      <div class="grid" id="counters"></div>
+      <h3>Busiest hosts</h3>
+      <table><thead><tr><th>Host</th><th class="num">Requests</th><th class="num">Data</th><th class="num">Errors</th></tr></thead><tbody id="topHosts"></tbody></table>
+      <p class="muted small" id="topHostsEmpty">Nothing yet. Once the launcher is pointed at this relay, its traffic shows up here.</p>
+    </div>
+  </section>
+
+  <!-- ===== Connect ===== -->
+  <section id="tab-connect" role="tabpanel" hidden>
+    <div class="card">
+      <h2>What to enter in the launcher</h2>
+      <p class="muted small">In the Prism fork: <b>Settings → APIs → Relay Server</b>. Paste these two values and press OK.</p>
+      <label for="cUrl">Relay address</label>
+      <div class="row"><input id="cUrl" type="text" readonly><button data-copy="cUrl">Copy</button></div>
+      <p class="small" id="cUrlHelp"></p>
+      <label for="cToken">Relay token <span class="muted">(the shared password)</span></label>
+      <div class="row"><input id="cToken" type="text" readonly><button id="btnShowToken">Show</button><button data-copy="cToken">Copy</button></div>
+      <div class="row" style="margin-top:10px">
+        <button id="btnNewToken" class="danger">Make a new token…</button>
+        <span class="muted small">The old token stops working immediately; update the launcher afterwards.</span>
+      </div>
+    </div>
+    <div class="card">
+      <h2>Or start the launcher from Terminal on the Mac</h2>
+      <p class="muted small">Uses environment variables instead of the settings page. They override whatever is saved in the launcher.</p>
+      <pre class="code" id="envBlock"></pre>
+      <button data-copy-text="envBlock">Copy</button>
+    </div>
+  </section>
+
+  <!-- ===== Server ===== -->
+  <section id="tab-server" role="tabpanel" hidden>
+    <div class="card">
+      <h2>Address and certificate</h2>
+      <label for="sDomain">Your relay's domain name</label>
+      <input id="sDomain" type="text" placeholder="relay.example.com" autocomplete="off" spellcheck="false">
+      <p class="muted small">A name that points at your home internet connection, for example from a dynamic-DNS service. Just the name: no https://, no port.</p>
+
+      <fieldset>
+        <legend class="small muted" style="margin-top:12px">How the relay gets its encryption certificate</legend>
+        <label class="radio"><input type="radio" name="tls" value="auto"><span><b>Automatic (recommended)</b>A free Let's Encrypt certificate, renewed by the relay itself. Needs port 443 reachable from the internet.</span></label>
+        <label class="radio"><input type="radio" name="tls" value="files"><span><b>My own certificate files</b>You already have a certificate and key (PEM files). Any port.</span></label>
+        <label class="radio"><input type="radio" name="tls" value="plain"><span><b>No encryption (testing only)</b>The token travels in the clear. Only for trying things on this computer.</span></label>
+      </fieldset>
+
+      <div id="filesBox" hidden>
+        <label for="sCert">Certificate file</label><input id="sCert" type="text" placeholder="C:\certs\fullchain.pem" spellcheck="false">
+        <label for="sKey">Key file</label><input id="sKey" type="text" placeholder="C:\certs\privkey.pem" spellcheck="false">
+      </div>
+      <div id="stagingBox" hidden>
+        <label class="radio" style="margin-top:10px"><input type="checkbox" id="sStaging"><span><b>Use Let's Encrypt's test mode</b>While you are still sorting out port forwarding, test mode avoids the hourly limit on failed real attempts. Its certificates are not trusted by the launcher, so turn this off before real use.</span></label>
+      </div>
+
+      <details style="margin-top:12px"><summary class="small">Advanced: port</summary>
+        <label for="sListen">Listen on</label>
+        <input id="sListen" type="text" placeholder="" spellcheck="false">
+        <p class="muted small">Leave empty for the default (<span id="listenDefault"></span>). Automatic certificates only work on 443.</p>
+      </details>
+
+      <div class="row" style="margin-top:14px">
+        <button id="btnSaveServer" class="primary">Save</button>
+        <button id="btnCert">Check certificate</button>
+        <span id="certResult" class="small"></span>
+      </div>
+    </div>
+
+    <div class="card">
+      <h2>Your router</h2>
+      <p>Forward <b>TCP port <span id="fwPort">443</span></b> to this computer, at <span id="lanList" class="mono"></span>.</p>
+      <ol class="small">
+        <li>Open your router's settings page (often 192.168.0.1 or 192.168.1.1).</li>
+        <li>Find "Port forwarding" (sometimes "Virtual server" or "NAT").</li>
+        <li>Add a rule: external port <span class="fwPortTxt">443</span>, protocol TCP, internal address as above, internal port <span class="fwPortTxt">443</span>.</li>
+        <li>Give this computer a fixed (reserved) address in the router, so the rule keeps working after a restart.</li>
+      </ol>
+      <p class="muted small">If your router's "WAN" address differs from what a "what is my IP" website shows, your provider shares one address between customers (CGNAT) and port forwarding cannot work; ask the provider for a public address.</p>
+    </div>
+  </section>
+
+  <!-- ===== Allowed hosts ===== -->
+  <section id="tab-hosts" role="tabpanel" hidden>
+    <div class="card" id="deniedCard" hidden>
+      <h2>Blocked requests</h2>
+      <p class="muted small">The launcher asked for these hosts and the relay refused because they are not on the list. Allow the ones you trust.</p>
+      <table><thead><tr><th>Host</th><th class="num">Times</th><th></th></tr></thead><tbody id="deniedRows"></tbody></table>
+    </div>
+    <div class="card">
+      <h2>Allow another host</h2>
+      <div class="row"><input id="newHost" type="text" placeholder="cdn.example.org   or   *.example.net" spellcheck="false"><button id="btnAddHost" class="primary">Allow</button></div>
+      <p class="muted small">A <code>*.</code> in front matches every subdomain (but not the bare name). Only the standard HTTPS port is allowed unless you add <code>:port</code>.</p>
+      <h3>Would this address be allowed?</h3>
+      <div class="row"><input id="checkHost" type="text" placeholder="https://libraries.minecraft.net/…" spellcheck="false"><button id="btnCheckHost">Check</button></div>
+      <p class="small" id="checkResult"></p>
+    </div>
+    <div class="card">
+      <h2>Your added hosts</h2>
+      <table><tbody id="extraRows"></tbody></table>
+      <p class="muted small" id="extraEmpty">None.</p>
+    </div>
+    <div class="card">
+      <h2>Built-in hosts <span class="muted small" id="builtinCount"></span></h2>
+      <p class="muted small">What Prism needs to sign in, download Minecraft and install mods. Untick one to refuse it.</p>
+      <div class="host-list" id="builtinList"></div>
+    </div>
+  </section>
+
+  <!-- ===== Activity ===== -->
+  <section id="tab-activity" role="tabpanel" hidden>
+    <div class="card">
+      <div class="row">
+        <input id="evFilter" type="search" placeholder="Filter by host, path or address" aria-label="Filter activity">
+        <label class="row small" style="margin:0;font-weight:400"><input type="checkbox" id="evProblems"> Problems only</label>
+        <button id="btnPause">Pause</button>
+        <button id="btnClearView">Clear view</button>
+      </div>
+      <div class="scroll" style="margin-top:10px">
+        <table><thead><tr><th>Time</th><th>Result</th><th>Request</th><th class="num">Status</th><th class="num">Size</th><th class="num">ms</th><th>From</th></tr></thead><tbody id="evRows"></tbody></table>
+        <p class="muted small" id="evEmpty">No activity yet.</p>
+      </div>
+      <p class="muted small">The last 1000 events are kept here. Everything is also written to a log file (query strings are never recorded).</p>
+    </div>
+  </section>
+
+  <!-- ===== Tools ===== -->
+  <section id="tab-tools" role="tabpanel" hidden>
+    <div class="card">
+      <h2>Can this computer reach what Prism needs?</h2>
+      <p class="muted small">Asks each service from this computer, the same way the relay will. If something fails here, it will fail for the launcher too.</p>
+      <button id="btnSelfTest" class="primary">Run test</button>
+      <table style="margin-top:10px"><tbody id="testRows"></tbody></table>
+      <p class="small" id="testSummary"></p>
+    </div>
+    <div class="card" id="autostartCard">
+      <h2>Start automatically</h2>
+      <label class="radio"><input type="checkbox" id="autostart"><span><b>Start the relay when I sign in to Windows</b>It runs in the background without a window. Run the program again any time to open this page.</span></label>
+    </div>
+    <div class="card" id="firewallCard">
+      <h2>Windows Firewall</h2>
+      <p class="small">Windows asks "Allow access?" the first time the relay listens. Choose <b>Allow</b> (tick <i>Private</i> networks; tick <i>Public</i> too if your home network is set to Public). Or add the rule yourself:</p>
+      <pre class="code" id="fwCommand"></pre>
+      <div class="row"><button id="btnFirewall">Add the rule now (needs administrator)</button><span id="fwResult" class="small"></span></div>
+    </div>
+    <div class="card">
+      <h2>This program</h2>
+      <p class="small">Version <span id="aVersion"></span>. Settings, certificates and the log are in:</p>
+      <pre class="code" id="aDir"></pre>
+      <div class="row"><button id="btnFolder">Open folder</button><span class="spacer"></span><button id="btnQuit" class="danger">Quit the relay program</button></div>
+    </div>
+  </section>
+</main>
+<div id="toast" class="toast" role="status" aria-live="polite" hidden></div>
+
+<script>
+"use strict";
+// ---------- helpers ----------
+const $ = (id) => document.getElementById(id);
+function h(tag, attrs, ...kids) {
+  const el = document.createElement(tag);
+  for (const [k, v] of Object.entries(attrs || {})) {
+    if (k === "class") el.className = v; else if (k === "text") el.textContent = v;
+    else if (k.startsWith("on")) el.addEventListener(k.slice(2), v); else if (v === true) el.setAttribute(k, ""); else if (v !== false && v != null) el.setAttribute(k, v);
+  }
+  for (const kid of kids.flat()) if (kid != null) el.append(kid.nodeType ? kid : document.createTextNode(String(kid)));
+  return el;
+}
+function fill(parent, ...kids) { parent.replaceChildren(...kids.flat().filter(Boolean)); }
+function fmtBytes(n) {
+  if (!n) return "0 B"; const u = ["B", "KB", "MB", "GB", "TB"]; let i = 0;
+  while (n >= 1024 && i < u.length - 1) { n /= 1024; i++; }
+  return (i ? n.toFixed(n < 10 ? 1 : 0) : n) + " " + u[i];
+}
+function fmtTime(t) { return new Date(t).toLocaleTimeString([], { hour12: false }); }
+function fmtDur(ms) {
+  const s = Math.floor(ms / 1000); if (s < 60) return s + " s";
+  const m = Math.floor(s / 60); if (m < 60) return m + " min";
+  const hr = Math.floor(m / 60); return hr < 48 ? hr + " h " + (m % 60) + " min" : Math.floor(hr / 24) + " days";
+}
+let toastTimer;
+function toast(msg, bad) {
+  const t = $("toast"); t.textContent = msg; t.className = "toast" + (bad ? " bad" : ""); t.hidden = false;
+  clearTimeout(toastTimer); toastTimer = setTimeout(() => (t.hidden = true), bad ? 9000 : 3500);
+}
+async function api(method, path, body) {
+  const opts = { method, headers: {} };
+  if (method !== "GET") { opts.headers["X-Admin"] = "1"; opts.headers["Content-Type"] = "application/json"; opts.body = JSON.stringify(body || {}); }
+  let res;
+  try { res = await fetch(path, opts); } catch (e) { throw new Error("Lost contact with the relay program. Is it still running?"); }
+  if (res.status === 401) { location.reload(); throw new Error("Signed out"); }
+  const data = await res.json().catch(() => ({}));
+  if (!res.ok) { const err = new Error(data.error || res.statusText); err.data = data; throw err; }
+  return data;
+}
+async function guarded(button, fn) {
+  const label = button && button.textContent; if (button) button.disabled = true;
+  try { return await fn(); } catch (e) { toast(e.message, true); } finally { if (button) { button.disabled = false; button.textContent = label; } }
+}
+async function copy(text, what) {
+  try { await navigator.clipboard.writeText(text); toast("Copied " + what); }
+  catch { const ta = h("textarea"); ta.value = text; document.body.append(ta); ta.select(); document.execCommand("copy"); ta.remove(); toast("Copied " + what); }
+}
+
+// ---------- state ----------
+let S = null, stats = null, certOK = false, paused = false, lastSeq = 0, events = [], tokenShown = false, serverDirty = false;
+const TABS = [["overview", "Overview"], ["connect", "Connect"], ["server", "Server"], ["hosts", "Allowed hosts"], ["activity", "Activity"], ["tools", "Tools"]];
+let currentTab = "overview";
+
+function buildTabs() {
+  fill($("tabs"), TABS.map(([id, name]) => h("button", { role: "tab", id: "t-" + id, "aria-selected": id === currentTab, "aria-controls": "tab-" + id,
+    onclick: () => showTab(id) }, name, id === "hosts" ? h("span", { class: "badge", id: "deniedBadge", hidden: true }) : null)));
+}
+function showTab(id) {
+  currentTab = id; location.hash = id;
+  for (const [t] of TABS) { $("tab-" + t).hidden = t !== id; $("t-" + t).setAttribute("aria-selected", t === id); }
+  if (id === "hosts") loadAllowlist();
+  if (id === "activity") renderEvents();
+}
+
+// ---------- header, banner, overview ----------
+function renderHeader() {
+  const st = S.status, pill = $("pill");
+  const label = { running: "Running", stopped: "Stopped", error: "Problem" }[st.state] || st.state;
+  pill.className = "pill " + st.state; pill.textContent = label;
+  $("barInfo").textContent = st.state === "running" ? "since " + fmtTime(st.startedAt) + " · " + st.addr : "";
+  $("btnStart").hidden = st.state === "running"; $("btnStop").hidden = st.state !== "running";
+  $("btnStart").textContent = st.state === "error" ? "Try again" : "Start relay";
+}
+function renderBanner() {
+  const st = S.status, kids = [];
+  if (st.state === "error") kids.push(h("div", { class: "callout bad" }, h("b", { text: "The relay is not running. " }), st.error));
+  if (st.restartNeeded) kids.push(h("div", { class: "callout warn" }, "You changed the address, port or certificate. ",
+    h("button", { class: "link", onclick: (e) => act(e.target, "restart") }, "Restart the relay"), " to apply it."));
+  if (S.settings.tlsMode === "plain") kids.push(h("div", { class: "callout warn" }, "No-encryption mode: the token is sent unprotected. Use it only for testing on this computer."));
+  fill($("banner"), kids);
+}
+function step(done, title, body, extra) {
+  return h("li", { class: done ? "done" : "" }, h("div", { class: "what" }, h("b", { text: title }), h("span", { class: "muted small" }, body)), extra || null);
+}
+function renderSteps() {
+  const s = S.settings, running = S.status.state === "running", plain = s.tlsMode === "plain", ls = (k) => localStorage.getItem(k) === "1";
+  const tick = (k) => h("button", { class: "link small", onclick: () => { localStorage.setItem(k, ls(k) ? "0" : "1"); renderSteps(); } }, ls(k) ? "undo" : "mark done");
+  const items = [
+    step(plain || !!s.domain, "Choose your domain name", "The name that points at your home connection (Server tab).", h("button", { class: "link", onclick: () => showTab("server") }, "Open")),
+    step(ls("fwd"), "Forward port " + S.port + " on your router", "To " + (S.lan.join(" or ") || "this computer") + ". Details are on the Server tab.", tick("fwd")),
+  ];
+  if (S.firewall.supported) items.push(step(ls("fw"), "Let the relay through Windows Firewall", "Answer Allow when Windows asks, or use the Tools tab.", tick("fw")));
+  items.push(step(running, "Start the relay", running ? "Running on " + S.status.addr + "." : "Press Start relay at the top."));
+  if (!plain) items.push(step(certOK, "Check the certificate", "Proves the internet can reach you on port " + S.port + ".", h("button", { class: "link", onclick: () => { showTab("server"); } }, "Open")));
+  items.push(step(stats && stats.requests > 0, "Connect the launcher", stats && stats.requests > 0 ? "The launcher has made " + stats.requests + " requests." : "Enter the address and token in the launcher (Connect tab).", h("button", { class: "link", onclick: () => showTab("connect") }, "Open")));
+  fill($("steps"), items);
+}
+function counter(n, label) { return h("div", { class: "stat" }, h("b", { text: n }), h("span", { text: label })); }
+function renderStats() {
+  if (!stats) return;
+  $("statsSince").textContent = fmtTime(stats.since);
+  fill($("counters"), counter(stats.requests.toLocaleString(), "requests served"), counter(fmtBytes(stats.bytesDown), "data sent to the launcher"),
+    counter(stats.denied.toLocaleString(), "refused: host not allowed"), counter(stats.errors.toLocaleString(), "errors"), counter(stats.authFails.toLocaleString(), "wrong-token attempts"));
+  $("topHostsEmpty").hidden = stats.hosts.length > 0;
+  fill($("topHosts"), stats.hosts.slice(0, 10).map((x) => h("tr", {}, h("td", { class: "mono", text: x.host }), h("td", { class: "num", text: x.requests.toLocaleString() }), h("td", { class: "num", text: fmtBytes(x.bytes) }), h("td", { class: "num", text: x.errors || "" }))));
+  const n = stats.deniedHosts.length, b = $("deniedBadge");
+  if (b) { b.hidden = n === 0; b.textContent = n; }
+  $("deniedCard").hidden = n === 0;
+  fill($("deniedRows"), stats.deniedHosts.map((d) => h("tr", {}, h("td", { class: "mono", text: d.host }), h("td", { class: "num", text: d.count }),
+    h("td", { class: "num" }, h("button", { onclick: (e) => allow(e.target, d.host) }, "Allow")))));
+  renderSteps();
+}
+
+// ---------- connect ----------
+function renderConnect() {
+  const url = S.prismUrl;
+  $("cUrl").value = url || "(set your domain on the Server tab first)";
+  $("cUrlHelp").textContent = S.settings.tlsMode === "plain" ? "Plain-HTTP testing address: only works from this computer." : "";
+  $("cToken").value = tokenShown ? S.settings.token : "•".repeat(24);
+  $("btnShowToken").textContent = tokenShown ? "Hide" : "Show";
+  $("envBlock").textContent = 'PRISM_RELAY_URL="' + (url || "https://relay.example.com") + '" \\\nPRISM_RELAY_TOKEN="' + S.settings.token + '" \\\n"/Applications/Prism Launcher.app/Contents/MacOS/prismlauncher"';
+}
+
+// ---------- server ----------
+function renderServer(force) {
+  const s = S.settings;
+  if (!force && serverDirty) return;
+  $("sDomain").value = s.domain; $("sCert").value = s.certFile; $("sKey").value = s.keyFile; $("sListen").value = s.listen; $("sStaging").checked = s.letsEncryptStaging;
+  for (const r of document.querySelectorAll("input[name=tls]")) r.checked = r.value === s.tlsMode;
+  syncServerForm();
+}
+function syncServerForm() {
+  const mode = document.querySelector("input[name=tls]:checked").value;
+  $("filesBox").hidden = mode !== "files"; $("stagingBox").hidden = mode !== "auto";
+  const def = { auto: ":443", files: ":8443", plain: "127.0.0.1:8080" }[mode];
+  $("listenDefault").textContent = def; $("sListen").placeholder = def;
+  const port = (($("sListen").value || def).split(":").pop()) || "443";
+  $("fwPort").textContent = port; for (const e of document.querySelectorAll(".fwPortTxt")) e.textContent = port;
+}
+function renderLan() { $("lanList").textContent = S.lan.length ? S.lan.join("  or  ") : "(this computer's address)"; }
+async function saveServer(button) {
+  return guarded(button, async () => {
+    S = await api("POST", "/api/settings", { domain: $("sDomain").value, tlsMode: document.querySelector("input[name=tls]:checked").value,
+      listen: $("sListen").value, certFile: $("sCert").value, keyFile: $("sKey").value, letsEncryptStaging: $("sStaging").checked });
+    serverDirty = false; renderAll(true); toast("Saved");
+  });
+}
+
+// ---------- allowed hosts ----------
+async function allow(button, host) {
+  return guarded(button, async () => { await api("POST", "/api/allow", { host }); toast("Allowed " + host); await refresh(); await loadAllowlist(); });
+}
+async function loadAllowlist() {
+  const a = await api("GET", "/api/allowlist");
+  $("extraEmpty").hidden = a.extra.length > 0;
+  fill($("extraRows"), a.extra.map((e) => h("tr", {}, h("td", { class: "mono", text: e }), h("td", { class: "num" }, h("button", { class: "danger", onclick: (ev) => removeExtra(ev.target, e) }, "Remove")))));
+  $("builtinCount").textContent = "(" + a.defaults.filter((d) => d.enabled).length + " of " + a.defaults.length + " on)";
+  fill($("builtinList"), a.defaults.map((d) => h("label", {}, h("input", { type: "checkbox", checked: d.enabled, onchange: (ev) => toggleBuiltin(ev.target, d.host) }), h("span", { class: "mono", text: d.host }))));
+}
+async function removeExtra(button, host) {
+  return guarded(button, async () => { await api("POST", "/api/settings", { extraHosts: S.settings.extraHosts.filter((x) => x !== host) }); await refresh(); await loadAllowlist(); });
+}
+async function toggleBuiltin(box, host) {
+  const off = new Set(S.settings.disabledHosts); box.checked ? off.delete(host) : off.add(host);
+  try { await api("POST", "/api/settings", { disabledHosts: [...off] }); await refresh(); await loadAllowlist(); } catch (e) { toast(e.message, true); box.checked = !box.checked; }
+}
+
+// ---------- activity ----------
+function evTag(e) {
+  if (e.kind === "ok") return e.status >= 500 ? h("span", { class: "tag bad", text: "server error" }) : e.status >= 400 ? h("span", { class: "tag warn", text: "refused upstream" }) : h("span", { class: "tag ok", text: "ok" });
+  return { deny: h("span", { class: "tag warn", text: "not allowed" }), error: h("span", { class: "tag bad", text: "failed" }), auth: h("span", { class: "tag bad", text: "wrong token" }),
+    locked: h("span", { class: "tag bad", text: "locked out" }), bad: h("span", { class: "tag warn", text: "bad request" }) }[e.kind] || h("span", { class: "tag info", text: e.kind });
+}
+function isProblem(e) { return e.kind !== "ok" || e.status >= 400; }
+function renderEvents() {
+  if (currentTab !== "activity") return;
+  const q = $("evFilter").value.trim().toLowerCase(), only = $("evProblems").checked;
+  const rows = events.filter((e) => (!only || isProblem(e)) && (!q || [e.host, e.path, e.client, e.note].join(" ").toLowerCase().includes(q))).slice(-300).reverse();
+  $("evEmpty").hidden = rows.length > 0;
+  fill($("evRows"), rows.map((e) => h("tr", {}, h("td", { class: "mono", text: fmtTime(e.time) }), h("td", {}, evTag(e)),
+    h("td", { class: "mono" }, e.method ? e.method + " " : "", e.host ? e.host + (e.path || "") : "", e.note ? h("div", { class: "muted small", text: e.note }) : null),
+    h("td", { class: "num", text: e.status || "" }), h("td", { class: "num", text: e.bytes ? fmtBytes(e.bytes) : "" }), h("td", { class: "num", text: e.ms || "" }), h("td", { class: "mono small", text: e.client || "" }))));
+}
+async function pollEvents() {
+  if (paused) return;
+  const r = await api("GET", "/api/events?since=" + lastSeq);
+  if (r.events.length) { events = events.concat(r.events).slice(-1000); renderEvents(); }
+  lastSeq = r.last;
+}
+
+// ---------- tools ----------
+function renderTools() {
+  $("autostartCard").hidden = !S.autostart.supported; $("autostart").checked = S.autostart.enabled;
+  $("firewallCard").hidden = !S.firewall.supported; $("fwCommand").textContent = S.firewall.command;
+  $("aVersion").textContent = S.version; $("aDir").textContent = S.dataDir;
+}
+
+// ---------- actions ----------
+async function act(button, action) {
+  return guarded(button, async () => {
+    try { S = await api("POST", "/api/relay/" + action); toast(action === "stop" ? "Relay stopped" : "Relay running"); }
+    catch (e) { if (e.data && e.data.state) S = e.data.state; throw e; }
+    finally { renderAll(); }
+  });
+}
+function renderAll(forceServer) {
+  if (!S) return;
+  renderHeader(); renderBanner(); renderConnect(); renderServer(forceServer); renderLan(); renderTools(); renderSteps(); renderStats();
+}
+async function refresh() {
+  S = await api("GET", "/api/state"); stats = await api("GET", "/api/stats"); renderAll();
+}
+
+// ---------- wiring ----------
+function init() {
+  buildTabs();
+  const want = location.hash.slice(1); if (TABS.some(([t]) => t === want)) currentTab = want;
+  buildTabs(); showTab(currentTab);
+  $("btnStart").onclick = (e) => act(e.target, "start");
+  $("btnStop").onclick = (e) => act(e.target, "stop");
+  for (const b of document.querySelectorAll("[data-copy]")) b.onclick = () => copy($(b.dataset.copy).value === "•".repeat(24) ? S.settings.token : $(b.dataset.copy).value, "to clipboard");
+  for (const b of document.querySelectorAll("[data-copy-text]")) b.onclick = () => copy($(b.dataset.copyText).textContent, "to clipboard");
+  $("btnShowToken").onclick = () => { tokenShown = !tokenShown; renderConnect(); };
+  $("btnNewToken").onclick = async (e) => {
+    if (!confirm("Make a new token?\n\nThe launcher will stop working until you enter the new token in it.")) return;
+    guarded(e.target, async () => { S = await api("POST", "/api/token", {}); tokenShown = true; renderAll(); toast("New token created. Copy it into the launcher."); });
+  };
+  for (const r of document.querySelectorAll("input[name=tls]")) r.onchange = () => { serverDirty = true; syncServerForm(); };
+  for (const id of ["sDomain", "sCert", "sKey", "sListen", "sStaging"]) $(id).oninput = () => { serverDirty = true; syncServerForm(); };
+  $("btnSaveServer").onclick = (e) => saveServer(e.target);
+  $("btnCert").onclick = (e) => guarded(e.target, async () => {
+    const out = $("certResult"); out.textContent = "Asking… this can take up to a minute."; out.className = "small muted"; e.target.textContent = "Checking…";
+    if (serverDirty) await saveServer(null);
+    const r = await api("POST", "/api/cert/check");
+    if (r.ok) {
+      certOK = true; const c = r.cert;
+      out.className = "small tag ok"; out.textContent = "Certificate for " + (c.dnsNames[0] || c.subject) + " valid until " + new Date(c.notAfter).toLocaleDateString() + (c.staging ? " (TEST certificate: not trusted by the launcher)" : "");
+    } else { certOK = false; out.className = "small tag bad"; out.textContent = r.error; }
+    renderSteps();
+  });
+  $("btnAddHost").onclick = (e) => { const v = $("newHost").value.trim(); if (v) allow(e.target, v).then(() => ($("newHost").value = "")); };
+  $("newHost").onkeydown = (e) => { if (e.key === "Enter") $("btnAddHost").click(); };
+  const check = (e) => guarded(e.target || $("btnCheckHost"), async () => {
+    const r = await api("POST", "/api/allowlist/check", { input: $("checkHost").value });
+    const out = $("checkResult"); out.replaceChildren();
+    if (r.allowed) out.append(h("span", { class: "tag ok", text: "Allowed" }), " ", r.host, " matches ", h("code", { text: r.rule }));
+    else out.append(h("span", { class: "tag warn", text: "Not allowed" }), " ", r.host, " is not on the list. ", h("button", { class: "link", onclick: (ev) => allow(ev.target, r.host) }, "Allow it"));
+  });
+  $("btnCheckHost").onclick = check; $("checkHost").onkeydown = (e) => { if (e.key === "Enter") check(e); };
+  $("evFilter").oninput = renderEvents; $("evProblems").onchange = renderEvents;
+  $("btnPause").onclick = (e) => { paused = !paused; e.target.textContent = paused ? "Resume" : "Pause"; };
+  $("btnClearView").onclick = () => { events = []; renderEvents(); };
+  $("btnResetStats").onclick = (e) => guarded(e.target, async () => { stats = await api("POST", "/api/stats/reset"); renderStats(); });
+  $("btnSelfTest").onclick = (e) => guarded(e.target, async () => {
+    e.target.textContent = "Testing…"; $("testRows").replaceChildren(); $("testSummary").textContent = "";
+    const { results } = await api("POST", "/api/selftest");
+    fill($("testRows"), results.map((r) => h("tr", {}, h("td", {}, h("span", { class: "tag " + (r.ok ? "ok" : "bad"), text: r.ok ? "reachable" : "failed" })), h("td", { text: r.name }),
+      h("td", { class: "mono small", text: r.ok ? "HTTP " + r.status : r.error }), h("td", { class: "num", text: r.ms + " ms" }))));
+    const bad = results.filter((r) => !r.ok).length;
+    $("testSummary").className = "small tag " + (bad ? "bad" : "ok");
+    $("testSummary").textContent = bad ? bad + " of " + results.length + " failed. This computer's connection, DNS or a filter in front of it is blocking them." : "All " + results.length + " services answered. Any HTTP status counts: the point is that they respond.";
+  });
+  $("autostart").onchange = async (e) => { try { S = await api("POST", "/api/autostart", { enabled: e.target.checked }); renderTools(); toast(e.target.checked ? "Will start when you sign in" : "Will not start automatically"); } catch (err) { e.target.checked = !e.target.checked; toast(err.message, true); } };
+  $("btnFirewall").onclick = (e) => guarded(e.target, async () => {
+    const r = await api("POST", "/api/firewall"), out = $("fwResult");
+    out.className = "small tag " + (r.ok ? "ok" : "bad"); out.textContent = r.ok ? "Rule added." : r.error;
+  });
+  $("btnFolder").onclick = (e) => guarded(e.target, () => api("POST", "/api/open-folder"));
+  $("btnQuit").onclick = async () => {
+    if (!confirm("Quit the relay program? The launcher will stop working until it is started again.")) return;
+    try { await api("POST", "/api/quit"); } catch {}
+    document.body.replaceChildren(h("main", {}, h("div", { class: "card" }, h("h2", { text: "Relay program stopped" }), h("p", { text: "You can close this tab. Run the program again to restart the relay." }))));
+    clearInterval(pollTimer); clearInterval(eventTimer);
+  };
+  refresh().catch((e) => toast(e.message, true));
+}
+let pollTimer = setInterval(() => refresh().catch(() => {}), 3000);
+let eventTimer = setInterval(() => pollEvents().catch(() => {}), 1500);
+window.addEventListener("hashchange", () => { const w = location.hash.slice(1); if (TABS.some(([t]) => t === w) && w !== currentTab) showTab(w); });
+init();
+</script>
+</body>
+</html>

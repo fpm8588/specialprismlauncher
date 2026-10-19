@@ -2,7 +2,6 @@ package main
 
 import (
 	"io"
-	"log"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
@@ -20,7 +19,6 @@ func newTestRelay(t *testing.T, allowedHosts ...string) *httptest.Server {
 		Allow:        NewAllowlist(allowedHosts),
 		Scheme:       "http",
 		AllowPrivate: true, // upstreams are on 127.0.0.1
-		Logger:       log.New(io.Discard, "", 0),
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -214,7 +212,6 @@ func TestRefusesPrivateAddressesByDefault(t *testing.T) {
 		Token:  testToken,
 		Allow:  NewAllowlist([]string{hostOf(up)}),
 		Scheme: "http",
-		Logger: log.New(io.Discard, "", 0),
 		// AllowPrivate left false: a name that resolves to the LAN must not be reachable.
 	})
 	if err != nil {
@@ -321,5 +318,71 @@ func TestDefaultAllowlistCoversPrismHosts(t *testing.T) {
 func TestNewServerRejectsWeakToken(t *testing.T) {
 	if _, err := NewServer(Config{Token: "short", Allow: NewAllowlist(nil)}); err == nil {
 		t.Error("expected error for short token")
+	}
+}
+
+func TestEmitsEventsForEveryOutcome(t *testing.T) {
+	up := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { io.WriteString(w, "hello") }))
+	defer up.Close()
+	var events []Event
+	s, err := NewServer(Config{
+		Token: testToken, Allow: NewAllowlist([]string{hostOf(up)}), Scheme: "http", AllowPrivate: true,
+		OnEvent: func(e Event) { events = append(events, e) },
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	relay := httptest.NewServer(s)
+	defer relay.Close()
+
+	do(t, "GET", relay.URL+"/r/"+hostOf(up)+"/a/b?secret=1", testToken, nil, nil)
+	do(t, "GET", relay.URL+"/r/nope.example.com/x", testToken, nil, nil)
+	do(t, "GET", relay.URL+"/r/"+hostOf(up)+"/", "bad-token-0123456789abcdefgh", nil, nil)
+	do(t, "GET", relay.URL+"/nonsense", testToken, nil, nil)
+
+	kinds := []string{}
+	for _, e := range events {
+		kinds = append(kinds, e.Kind)
+		if strings.Contains(e.Line(), "secret=1") || strings.Contains(e.Path, "secret") {
+			t.Errorf("query string leaked into event: %+v", e)
+		}
+	}
+	want := []string{KindOK, KindDeny, KindAuth, KindBad}
+	if strings.Join(kinds, ",") != strings.Join(want, ",") {
+		t.Fatalf("event kinds = %v, want %v", kinds, want)
+	}
+	if events[0].Host != hostOf(up) || events[0].Status != 200 || events[0].Bytes != 5 || events[0].Path != "/a/b" {
+		t.Errorf("ok event wrong: %+v", events[0])
+	}
+}
+
+func TestTokenAndAllowlistCanChangeWhileServing(t *testing.T) {
+	up := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { io.WriteString(w, "ok") }))
+	defer up.Close()
+	s, _ := NewServer(Config{Token: testToken, Allow: NewAllowlist(nil), Scheme: "http", AllowPrivate: true})
+	relay := httptest.NewServer(s)
+	defer relay.Close()
+	url := relay.URL + "/r/" + hostOf(up) + "/"
+
+	if resp, _ := do(t, "GET", url, testToken, nil, nil); resp.StatusCode != 403 {
+		t.Fatalf("before allowing: %d, want 403", resp.StatusCode)
+	}
+	s.SetAllowlist(NewAllowlist([]string{hostOf(up)}))
+	if resp, _ := do(t, "GET", url, testToken, nil, nil); resp.StatusCode != 200 {
+		t.Fatalf("after allowing: %d, want 200", resp.StatusCode)
+	}
+
+	const newToken = "another-token-0123456789abcdef"
+	if err := s.SetToken(newToken); err != nil {
+		t.Fatal(err)
+	}
+	if resp, _ := do(t, "GET", url, testToken, nil, nil); resp.StatusCode != 401 {
+		t.Errorf("old token after change: %d, want 401", resp.StatusCode)
+	}
+	if resp, _ := do(t, "GET", url, newToken, nil, nil); resp.StatusCode != 200 {
+		t.Errorf("new token: %d, want 200", resp.StatusCode)
+	}
+	if err := s.SetToken("short"); err == nil {
+		t.Error("a short token must be refused")
 	}
 }
