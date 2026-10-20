@@ -1,7 +1,11 @@
 name: Build macOS app (home relay)
 
 # Builds only the macOS app, reusing upstream's setup and packaging steps, and produces a signed
-# (ad-hoc) "Prism Launcher.app" as a downloadable zip and disk image.
+# (ad-hoc) "Prism Launcher.app" as a downloadable zip and disk image. It builds for Apple silicon
+# (M1 and later) only: a universal build compiles everything twice.
+#
+# Builds are cached (compiled objects and vcpkg libraries), so the first run is slow and later runs
+# only recompile what changed.
 #
 # Run it from the Actions tab: "Build macOS app (home relay)" -> Run workflow.
 
@@ -24,7 +28,7 @@ permissions: {}
 
 jobs:
   macos:
-    name: Build (macOS universal)
+    name: Build (macOS, Apple silicon)
 
     permissions:
       contents: read
@@ -37,7 +41,7 @@ jobs:
       ARTIFACT_NAME: macOS-Qt6
       BUILD_PLATFORM: home-relay
       BUILD_TYPE: ${{ inputs.build-type || 'Release' }}
-      CMAKE_PRESET: macos_universal
+      CMAKE_PRESET: macos
       MACOSX_DEPLOYMENT_TARGET: "12.0"
 
     steps:
@@ -54,12 +58,38 @@ jobs:
           artifact-name: macOS
           qt-version: 6.9.3
 
+      # Upstream turns its compile cache on for Debug builds only; this does the same for Release.
+      - name: Setup compile cache
+        if: ${{ env.BUILD_TYPE == 'Release' }}
+        uses: hendrikmuhs/ccache-action@v1.2.22
+        with:
+          variant: sccache
+          create-symlink: true
+          key: ${{ runner.os }}-${{ runner.arch }}-home-relay-sccache
+
+      - name: Use compile cache
+        if: ${{ env.BUILD_TYPE == 'Release' }}
+        run: |
+          echo "CMAKE_C_COMPILER_LAUNCHER=sccache" >> "$GITHUB_ENV"
+          echo "CMAKE_CXX_COMPILER_LAUNCHER=sccache" >> "$GITHUB_ENV"
+
+      # Libraries that vcpkg builds from source (about 6 minutes the first time).
+      - name: Cache vcpkg libraries
+        if: ${{ env.BUILD_TYPE == 'Release' }}
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/vcpkg/archives
+          key: vcpkg-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('vcpkg.json', 'vcpkg-configuration.json') }}
+
       # The two MACOSX_SPARKLE_* values are what switch Sparkle, the macOS auto-updater, on. Emptying
       # them removes it: it would otherwise contact prismlauncher.org directly (bypassing the relay)
       # and offer to replace this fork with the stock launcher.
       - name: Configure project
         run: |
+          # ENABLE_LTO=OFF: link-time optimization makes the final link very slow and the result only slightly faster.
           cmake --preset "$CMAKE_PRESET" \
+            -DCMAKE_OSX_ARCHITECTURES=arm64 \
+            -DENABLE_LTO=OFF \
             -DMACOSX_SPARKLE_UPDATE_FEED_URL= \
             -DMACOSX_SPARKLE_UPDATE_PUBLIC_KEY=
 
