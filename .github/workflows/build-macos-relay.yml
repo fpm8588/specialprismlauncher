@@ -67,9 +67,31 @@ jobs:
         run: |
           cmake --build --preset "$CMAKE_PRESET" --config "$BUILD_TYPE"
 
+      # A failing test is reported but does not stop the app from being packaged. The names of failing
+      # tests and the start of their output are written as annotations on the run page, and the whole
+      # log is uploaded as an artifact.
       - name: Run tests
+        continue-on-error: true
         run: |
-          ctest --preset "$CMAKE_PRESET" --build-config "$BUILD_TYPE"
+          set +e
+          ctest --preset "$CMAKE_PRESET" --build-config "$BUILD_TYPE" --output-on-failure > ctest.log 2>&1
+          status=$?
+          tail -n 150 ctest.log
+          if [ "$status" -ne 0 ]; then
+            names=$(grep -E 'Test +#[0-9]+: .*(Failed|\*\*\*)|tests failed|The following tests FAILED|^\s+[0-9]+ - ' ctest.log | head -40 | sed 's/%/%25/g' | awk '{printf "%s%%0A", $0}')
+            echo "::warning title=Tests failed::${names}"
+            detail=$(grep -n -B3 -A30 -E 'FAIL!|Failed|\*\*\*' ctest.log | head -120 | sed 's/%/%25/g' | awk '{printf "%s%%0A", $0}')
+            echo "::warning title=Failure details::${detail}"
+          fi
+          exit "$status"
+
+      - name: Upload test log
+        if: ${{ always() }}
+        uses: actions/upload-artifact@v7
+        with:
+          name: ctest-log
+          path: ctest.log
+          if-no-files-found: ignore
 
       - name: Get short version
         id: short-version
