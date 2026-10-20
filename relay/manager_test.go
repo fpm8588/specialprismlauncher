@@ -554,3 +554,60 @@ func TestLetsEncryptAlpnVisitIsLoggedOnTheMainPort(t *testing.T) {
 	}
 	t.Errorf("the tls-alpn-01 visit was not logged: %+v", evs)
 }
+
+func TestFailureFromAuthz(t *testing.T) {
+	invalid := []byte(`{"status":"invalid","identifier":{"type":"dns","value":"x.example.com"},"challenges":[
+		{"type":"http-01","status":"invalid","error":{"type":"urn:ietf:params:acme:error:connection","detail":"1.2.3.4: Fetching http://x.example.com/.well-known/acme-challenge/t: Timeout during connect (likely firewall problem)"}},
+		{"type":"dns-01","status":"pending"}]}`)
+	got := failureFromAuthz(invalid)
+	if !strings.HasPrefix(got, "http-01: 1.2.3.4: Fetching") || strings.Contains(got, "dns-01") {
+		t.Errorf("failureFromAuthz = %q", got)
+	}
+	if failureFromAuthz([]byte(`{"status":"pending","challenges":[]}`)) != "" {
+		t.Error("a pending authorization has not failed")
+	}
+	if failureFromAuthz([]byte(`not json`)) != "" {
+		t.Error("garbage must be ignored")
+	}
+}
+
+func TestAcmeSpyReportsFailuresAndPassesTheBodyOn(t *testing.T) {
+	const body = `{"status":"invalid","challenges":[{"type":"tls-alpn-01","status":"invalid","error":{"detail":"Connection refused"}}]}`
+	up := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		io.WriteString(w, body)
+	}))
+	defer up.Close()
+
+	var seen []string
+	client := &http.Client{Transport: &acmeSpy{base: http.DefaultTransport, onFailure: func(s string) { seen = append(seen, s) }}}
+	resp, err := client.Get(up.URL + "/acme/authz/123")
+	if err != nil {
+		t.Fatal(err)
+	}
+	got, _ := io.ReadAll(resp.Body)
+	resp.Body.Close()
+	if string(got) != body {
+		t.Errorf("the response body must reach autocert unchanged, got %q", got)
+	}
+	if len(seen) != 1 || seen[0] != "tls-alpn-01: Connection refused" {
+		t.Errorf("failures seen: %v", seen)
+	}
+	resp, _ = client.Get(up.URL + "/somewhere/else")
+	resp.Body.Close()
+	if len(seen) != 1 {
+		t.Errorf("requests that are not about authorizations must be ignored: %v", seen)
+	}
+}
+
+func TestACMEFailuresAreCollectedOncePerCheck(t *testing.T) {
+	m := newTestManager(t)
+	m.addACMEFailure("http-01: timeout")
+	m.addACMEFailure("http-01: timeout")
+	m.addACMEFailure("tls-alpn-01: refused")
+	if got := m.takeACMEFailures(); got != "http-01: timeout | tls-alpn-01: refused" {
+		t.Errorf("collected %q", got)
+	}
+	if got := m.takeACMEFailures(); got != "" {
+		t.Errorf("taking must clear: %q", got)
+	}
+}

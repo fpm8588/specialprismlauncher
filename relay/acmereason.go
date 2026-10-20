@@ -1,11 +1,15 @@
 package main
 
 import (
+	"bytes"
 	"context"
 	"crypto/x509"
+	"encoding/json"
 	"encoding/pem"
 	"errors"
 	"fmt"
+	"io"
+	"net/http"
 	"regexp"
 	"strings"
 
@@ -102,4 +106,55 @@ func certFailure(reason string, lookupErr, original error) error {
 		msg += ". " + hint
 	}
 	return fmt.Errorf("%s", msg)
+}
+
+// autocert tries one challenge type per order and, when a type fails, starts a NEW order for the next type.
+// When both types have failed it opens a third order with nothing left to try and reports "no viable
+// challenge type found" about that fresh authorization, which has no recorded failure. The reasons Let's
+// Encrypt gave are on the earlier orders, so they are collected here as the answers to autocert's own
+// requests go by.
+type acmeSpy struct {
+	base      http.RoundTripper
+	onFailure func(string)
+}
+
+func (t *acmeSpy) RoundTrip(req *http.Request) (*http.Response, error) {
+	resp, err := t.base.RoundTrip(req)
+	if err != nil || resp == nil || resp.Body == nil || !strings.Contains(req.URL.Path, "/authz") {
+		return resp, err
+	}
+	body, readErr := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
+	resp.Body.Close()
+	resp.Body = io.NopCloser(bytes.NewReader(body))
+	if readErr == nil {
+		if msg := failureFromAuthz(body); msg != "" {
+			t.onFailure(msg)
+		}
+	}
+	return resp, err
+}
+
+// failureFromAuthz extracts, from an ACME authorization object that has failed, each attempted challenge's
+// type and the CA's explanation. It returns "" for authorizations that have not failed.
+func failureFromAuthz(body []byte) string {
+	var a struct {
+		Status     string `json:"status"`
+		Challenges []struct {
+			Type   string `json:"type"`
+			Status string `json:"status"`
+			Error  *struct {
+				Detail string `json:"detail"`
+			} `json:"error"`
+		} `json:"challenges"`
+	}
+	if json.Unmarshal(body, &a) != nil || a.Status != "invalid" {
+		return ""
+	}
+	var parts []string
+	for _, c := range a.Challenges {
+		if c.Error != nil && c.Error.Detail != "" {
+			parts = append(parts, c.Type+": "+c.Error.Detail)
+		}
+	}
+	return strings.Join(parts, " | ")
 }

@@ -93,6 +93,7 @@ type Manager struct {
 	// challengeSrv answers Let's Encrypt's "http-01" challenge on port 80 (automatic mode only).
 	challengeSrv *http.Server
 	httpAddr     string   // where challengeSrv listens; ":80" unless a test overrides it
+	acmeFailures []string // reasons Let's Encrypt gave for failed validations since the last check began
 	running      Settings // settings the listener was started with
 
 	// overridable for tests
@@ -284,10 +285,39 @@ func (m *Manager) newAutocert(s Settings) *autocert.Manager {
 		HostPolicy: autocert.HostWhitelist(s.Domain),
 		Cache:      autocert.DirCache(filepath.Join(m.Dir, certDirName(s))),
 	}
+	directory := acme.LetsEncryptURL
 	if s.LetsEncryptStaging {
-		a.Client = &acme.Client{DirectoryURL: letsEncryptStagingURL}
+		directory = letsEncryptStagingURL
+	}
+	a.Client = &acme.Client{
+		DirectoryURL: directory,
+		HTTPClient:   &http.Client{Transport: &acmeSpy{base: http.DefaultTransport, onFailure: m.addACMEFailure}},
 	}
 	return a
+}
+
+func (m *Manager) addACMEFailure(msg string) {
+	m.mu.Lock()
+	dup := false
+	for _, f := range m.acmeFailures {
+		if f == msg {
+			dup = true
+		}
+	}
+	if !dup {
+		m.acmeFailures = append(m.acmeFailures, msg)
+	}
+	m.mu.Unlock()
+	m.note(KindError, "Let's Encrypt could not validate the domain: "+msg)
+}
+
+// takeACMEFailures returns and clears the failures collected so far.
+func (m *Manager) takeACMEFailures() string {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	out := strings.Join(m.acmeFailures, " | ")
+	m.acmeFailures = nil
+	return out
 }
 
 // certDirName keeps staging certificates apart from real ones, so switching between them is safe.
@@ -358,6 +388,7 @@ func (m *Manager) CheckCertificate() (CertInfo, error) {
 	if s.Domain == "" {
 		return CertInfo{}, errors.New("set your domain name first")
 	}
+	m.takeACMEFailures() // forget failures from earlier checks
 	m.mu.Lock()
 	acm := m.acm
 	live := m.state == StateRunning && m.running.TLSMode == TLSAuto && acm != nil
@@ -382,9 +413,13 @@ func (m *Manager) CheckCertificate() (CertInfo, error) {
 	select {
 	case r := <-ch:
 		if r.err != nil {
-			ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
-			reason, lookupErr := letsEncryptReason(ctx, filepath.Join(m.Dir, certDirName(s)), s.LetsEncryptStaging, r.err)
-			cancel()
+			reason := m.takeACMEFailures()
+			var lookupErr error
+			if reason == "" { // nothing was seen go by: ask for the failed authorization itself
+				ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+				reason, lookupErr = letsEncryptReason(ctx, filepath.Join(m.Dir, certDirName(s)), s.LetsEncryptStaging, r.err)
+				cancel()
+			}
 			switch {
 			case reason != "":
 				m.note(KindError, "certificate check failed; Let's Encrypt said: "+reason)
