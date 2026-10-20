@@ -160,6 +160,7 @@ type stateResponse struct {
 	Status    Status   `json:"status"`
 	PrismURL  string   `json:"prismUrl"`
 	Port      int      `json:"port"`
+	Ports     []int    `json:"ports"` // every port that must be reachable (443, plus 80 for automatic certificates)
 	LAN       []string `json:"lan"`
 	Autostart struct {
 		Supported bool `json:"supported"`
@@ -180,7 +181,12 @@ func (a *Admin) state() stateResponse {
 	r.Settings, r.Status = s, a.m.Status()
 	r.PrismURL, r.Port, r.LAN = s.PrismURL(), s.ListenPort(), LANAddresses()
 	r.Autostart.Supported, r.Autostart.Enabled = autostartSupported(), autostartEnabled()
-	r.Firewall.Supported, r.Firewall.Command = firewallSupported(), firewallCommand(s.ListenPort())
+	r.Ports = neededPorts(s)
+	cmds := []string{}
+	for _, port := range r.Ports {
+		cmds = append(cmds, firewallCommand(port))
+	}
+	r.Firewall.Supported, r.Firewall.Command = firewallSupported(), strings.Join(cmds, "\n")
 	r.DefaultHosts = len(DefaultHosts)
 	return r
 }
@@ -433,11 +439,15 @@ func (a *Admin) handleAutostart(w http.ResponseWriter, r *http.Request) {
 }
 
 func (a *Admin) handleFirewall(w http.ResponseWriter, r *http.Request) {
-	port := a.m.Store.Get().ListenPort()
-	out, err := addFirewallRule(port)
-	if err != nil {
-		writeJSON(w, 200, map[string]any{"ok": false, "error": err.Error(), "command": firewallCommand(port)})
-		return
+	var out string
+	for _, port := range neededPorts(a.m.Store.Get()) {
+		o, err := addFirewallRule(port)
+		if err != nil {
+			state := a.state()
+			writeJSON(w, 200, map[string]any{"ok": false, "error": err.Error(), "command": state.Firewall.Command})
+			return
+		}
+		out += o
 	}
 	writeJSON(w, 200, map[string]any{"ok": true, "output": out})
 }
@@ -464,4 +474,14 @@ func executablePath() string {
 		return p
 	}
 	return os.Args[0]
+}
+
+// neededPorts lists the TCP ports that must reach this PC: the relay's own, plus port 80 when Let's Encrypt
+// certificates are managed automatically (it answers the "http-01" challenge there).
+func neededPorts(s Settings) []int {
+	ports := []int{s.ListenPort()}
+	if s.TLSMode == TLSAuto {
+		ports = append(ports, 80)
+	}
+	return ports
 }

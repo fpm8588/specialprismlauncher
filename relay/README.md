@@ -28,8 +28,9 @@ Everything Works". This file is the short version.
    choose **More info → Run anyway**.
 2. A console window opens and your browser opens the **admin page**. Keep the console open (closing
    it stops the relay), or turn on *Tools → Start when I sign in* to run it hidden in the background.
-3. **Server tab:** type your domain name and press Save. Forward TCP port 443 on your router to
-   this computer (the tab shows the address to use).
+3. **Server tab:** type your domain name and press Save. Forward TCP ports **443 and 80** on your
+   router to this computer (the tab shows the address to use). Let's Encrypt uses port 80 to check
+   that you own the domain; the relay answers it there and sends everything else to https.
 4. Press **Start relay**. Windows Firewall will ask to allow access: choose **Allow**.
 5. **Server tab → Check certificate** proves the internet can reach you and fetches the free
    Let's Encrypt certificate.

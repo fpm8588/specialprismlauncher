@@ -392,3 +392,66 @@ func TestHostFromInput(t *testing.T) {
 		}
 	}
 }
+
+func TestAutomaticModeAnswersHTTPChallengeOnPort80(t *testing.T) {
+	m := newTestManager(t)
+	m.httpAddr = freeAddr(t) // stands in for port 80
+	if _, err := m.Store.Update(func(s *Settings) { s.TLSMode, s.Domain, s.Listen = TLSAuto, "relay.example.com", freeAddr(t) }); err != nil {
+		t.Fatal(err)
+	}
+	if err := m.Start(); err != nil {
+		t.Fatal(err)
+	}
+
+	noRedirect := &http.Client{CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }}
+	// ordinary requests on the plain port are sent to https for the domain
+	resp, err := noRedirect.Get("http://" + m.httpAddr + "/anything")
+	if err != nil {
+		t.Fatalf("the challenge listener is not up: %v", err)
+	}
+	resp.Body.Close()
+	if resp.StatusCode < 300 || resp.StatusCode > 399 || !strings.HasPrefix(resp.Header.Get("Location"), "https://") {
+		t.Errorf("plain-port request: %d to %q, want a redirect to https", resp.StatusCode, resp.Header.Get("Location"))
+	}
+	// the challenge path is handled by autocert (an unknown token is refused with 403), not redirected
+	resp, err = noRedirect.Get("http://" + m.httpAddr + "/.well-known/acme-challenge/unknown-token")
+	if err != nil {
+		t.Fatal(err)
+	}
+	resp.Body.Close()
+	if resp.StatusCode != http.StatusForbidden {
+		t.Errorf("unknown challenge token: %d, want 403 from the ACME handler (a redirect would break validation)", resp.StatusCode)
+	}
+
+	m.Stop()
+	if _, err := http.Get("http://" + m.httpAddr + "/"); err == nil {
+		t.Error("port 80 listener should close when the relay stops")
+	}
+}
+
+func TestCertificateCheckNeedsTheRelayRunning(t *testing.T) {
+	m := newTestManager(t)
+	m.Store.Update(func(s *Settings) { s.TLSMode, s.Domain = TLSAuto, "relay.example.com" })
+	if _, err := m.CheckCertificate(); err == nil || !strings.Contains(err.Error(), "start the relay first") {
+		t.Errorf("not running: %v", err)
+	}
+}
+
+func TestPlainAndFilesModesDoNotOpenPort80(t *testing.T) {
+	m := newTestManager(t)
+	m.httpAddr = freeAddr(t)
+	startPlain(t, m)
+	if conn, err := net.Dial("tcp", m.httpAddr); err == nil {
+		conn.Close()
+		t.Error("plain mode must not listen for Let's Encrypt")
+	}
+}
+
+func TestNeededPorts(t *testing.T) {
+	if got := neededPorts(Settings{TLSMode: TLSAuto}); len(got) != 2 || got[0] != 443 || got[1] != 80 {
+		t.Errorf("auto: %v", got)
+	}
+	if got := neededPorts(Settings{TLSMode: TLSFiles}); len(got) != 1 || got[0] != 8443 {
+		t.Errorf("files: %v", got)
+	}
+}

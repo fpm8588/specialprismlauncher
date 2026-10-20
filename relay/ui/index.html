@@ -169,7 +169,7 @@
       <details style="margin-top:12px"><summary class="small">Advanced: port</summary>
         <label for="sListen">Listen on</label>
         <input id="sListen" type="text" placeholder="" spellcheck="false">
-        <p class="muted small">Leave empty for the default (<span id="listenDefault"></span>). Automatic certificates only work on 443.</p>
+        <p class="muted small">Leave empty for the default (<span id="listenDefault"></span>). Automatic certificates only work on 443 (and 80).</p>
       </details>
 
       <div class="row" style="margin-top:14px">
@@ -181,11 +181,11 @@
 
     <div class="card">
       <h2>Your router</h2>
-      <p>Forward <b>TCP port <span id="fwPort">443</span></b> to this computer, at <span id="lanList" class="mono"></span>.</p>
+      <p>Forward <b>TCP port <span id="fwPort">443</span></b><span id="fwPort80"> <b>and TCP port 80</b></span> to this computer, at <span id="lanList" class="mono"></span>.</p>
       <ol class="small">
         <li>Open your router's settings page (often 192.168.0.1 or 192.168.1.1).</li>
         <li>Find "Port forwarding" (sometimes "Virtual server" or "NAT").</li>
-        <li>Add a rule: external port <span class="fwPortTxt">443</span>, protocol TCP, internal address as above, internal port <span class="fwPortTxt">443</span>.</li>
+        <li>Add a rule: external port <span class="fwPortTxt">443</span>, protocol TCP, internal address as above, internal port <span class="fwPortTxt">443</span>.<span id="fwRule80"> Add a second rule the same way for port <b>80</b>: Let&#39;s Encrypt may use it to check that you own the domain.</span></li>
         <li>Give this computer a fixed (reserved) address in the router, so the rule keeps working after a restart.</li>
       </ol>
       <p class="muted small">If your router's "WAN" address differs from what a "what is my IP" website shows, your provider shares one address between customers (CGNAT) and port forwarding cannot work; ask the provider for a public address.</p>
@@ -355,7 +355,7 @@ function renderSteps() {
   const tick = (k) => h("button", { class: "link small", onclick: () => { localStorage.setItem(k, ls(k) ? "0" : "1"); renderSteps(); } }, ls(k) ? "undo" : "mark done");
   const items = [
     step(plain || !!s.domain, "Choose your domain name", "The name that points at your home connection (Server tab).", h("button", { class: "link", onclick: () => showTab("server") }, "Open")),
-    step(ls("fwd"), "Forward port " + S.port + " on your router", "To " + (S.lan.join(" or ") || "this computer") + ". Details are on the Server tab.", tick("fwd")),
+    step(ls("fwd"), "Forward port " + S.ports.join(" and ") + " on your router", "To " + (S.lan.join(" or ") || "this computer") + ". Details are on the Server tab.", tick("fwd")),
   ];
   if (S.firewall.supported) items.push(step(ls("fw"), "Let the relay through Windows Firewall", "Answer Allow when Windows asks, or use the Tools tab.", tick("fw")));
   items.push(step(running, "Start the relay", running ? "Running on " + S.status.addr + "." : "Press Start relay at the top."));
@@ -404,6 +404,7 @@ function syncServerForm() {
   $("listenDefault").textContent = def; $("sListen").placeholder = def;
   const port = (($("sListen").value || def).split(":").pop()) || "443";
   $("fwPort").textContent = port; for (const e of document.querySelectorAll(".fwPortTxt")) e.textContent = port;
+  $("fwPort80").hidden = $("fwRule80").hidden = mode !== "auto";
 }
 function renderLan() { $("lanList").textContent = S.lan.length ? S.lan.join("  or  ") : "(this computer's address)"; }
 async function saveServer(button) {

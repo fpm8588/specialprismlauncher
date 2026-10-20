@@ -90,7 +90,10 @@ type Manager struct {
 	addr    string
 	httpSrv *http.Server
 	acm     *autocert.Manager
-	running Settings // settings the listener was started with
+	// challengeSrv answers Let's Encrypt's "http-01" challenge on port 80 (automatic mode only).
+	challengeSrv *http.Server
+	httpAddr     string   // where challengeSrv listens; ":80" unless a test overrides it
+	running      Settings // settings the listener was started with
 
 	// overridable for tests
 	probes []probeTarget
@@ -107,7 +110,7 @@ func NewManager(dir, version string, opts ...func(*Config)) (*Manager, error) {
 		out = f
 	}
 	m := &Manager{Dir: dir, Version: version, Store: store, Events: NewEventLog(1000, out), Stats: NewStats(),
-		state: StateStopped, probes: defaultProbes}
+		state: StateStopped, probes: defaultProbes, httpAddr: ":80"}
 
 	cfg := Config{OnEvent: m.record}
 	for _, o := range opts {
@@ -211,6 +214,9 @@ func (m *Manager) startLocked() error {
 	m.httpSrv, m.addr, m.started, m.running = srv, ln.Addr().String(), time.Now(), s
 	m.state, m.lastErr = StateRunning, ""
 	m.note(KindOK, fmt.Sprintf("relay started on %s (%s)", m.addr, s.TLSMode))
+	if s.TLSMode == TLSAuto {
+		m.startChallengeServer()
+	}
 
 	go func() {
 		var serveErr error
@@ -229,6 +235,26 @@ func (m *Manager) startLocked() error {
 		}
 	}()
 	return nil
+}
+
+// startChallengeServer listens on port 80 and answers Let's Encrypt's "http-01" challenge, in addition to the
+// "tls-alpn-01" challenge on the main port. Let's Encrypt may offer only one of the two for a given order,
+// and autocert fails with "no viable challenge type found" if it is prepared for only the other.
+// Anything else arriving on port 80 is redirected to https. Failing to bind port 80 is not fatal.
+func (m *Manager) startChallengeServer() {
+	ln, err := net.Listen("tcp", m.httpAddr)
+	if err != nil {
+		m.note(KindError, "port 80 is not available ("+friendlyListenError(m.httpAddr, err).Error()+"); certificates will only be requested through the main port")
+		return
+	}
+	srv := &http.Server{Handler: m.acm.HTTPHandler(nil), ReadHeaderTimeout: 10 * time.Second}
+	m.challengeSrv = srv
+	m.note(KindOK, "listening on "+ln.Addr().String()+" for Let's Encrypt")
+	go func() {
+		if err := srv.Serve(ln); err != nil && !errors.Is(err, http.ErrServerClosed) {
+			m.note(KindError, "port 80 listener stopped: "+err.Error())
+		}
+	}()
 }
 
 func (m *Manager) newAutocert(s Settings) *autocert.Manager {
@@ -267,9 +293,14 @@ func (m *Manager) Stop() {
 	m.mu.Lock()
 	srv := m.httpSrv
 	m.httpSrv = nil
+	challenge := m.challengeSrv
+	m.challengeSrv = nil
 	wasRunning := m.state == StateRunning
 	m.state, m.lastErr = StateStopped, ""
 	m.mu.Unlock()
+	if challenge != nil {
+		_ = challenge.Close()
+	}
 	if srv == nil {
 		return
 	}
@@ -308,10 +339,15 @@ func (m *Manager) CheckCertificate() (CertInfo, error) {
 	}
 	m.mu.Lock()
 	acm := m.acm
-	if acm == nil || m.running.Domain != s.Domain || m.running.LetsEncryptStaging != s.LetsEncryptStaging {
-		acm = m.newAutocert(s)
-	}
+	live := m.state == StateRunning && m.running.TLSMode == TLSAuto && acm != nil
+	stale := m.running.Domain != s.Domain || m.running.LetsEncryptStaging != s.LetsEncryptStaging
 	m.mu.Unlock()
+	if !live {
+		return CertInfo{}, errors.New("start the relay first: Let's Encrypt connects to it from the internet to prove you own the domain")
+	}
+	if stale {
+		return CertInfo{}, errors.New("you changed the domain or test mode since the relay started: restart the relay, then check again")
+	}
 
 	type result struct {
 		cert *tls.Certificate
@@ -329,17 +365,20 @@ func (m *Manager) CheckCertificate() (CertInfo, error) {
 		}
 		return certInfo(*r.cert, s.Domain, s.LetsEncryptStaging)
 	case <-time.After(90 * time.Second):
-		return CertInfo{}, errors.New("timed out waiting for Let's Encrypt. Port 443 is probably not reachable from the internet; check the router's port forwarding")
+		return CertInfo{}, errors.New("timed out waiting for Let's Encrypt. Ports 80 and 443 are probably not reachable from the internet; check the router's port forwarding")
 	}
 }
 
 func explainCertError(err error) error {
 	msg := err.Error()
+	if strings.Contains(msg, "no viable challenge type") {
+		return fmt.Errorf("Let's Encrypt could not verify the domain with either method. Forward both port 80 and port 443 to this PC, allow both in the firewall, then restart the relay and try again. If you have retried many times, wait an hour (Let's Encrypt limits failed attempts) or use test mode: %w", err)
+	}
 	if strings.Contains(msg, "no such host") || strings.Contains(msg, "NXDOMAIN") || strings.Contains(msg, "DNS problem") {
 		return fmt.Errorf("Let's Encrypt cannot find your domain in DNS. Check that it points at your home IP address: %w", err)
 	}
 	if strings.Contains(msg, "Timeout") || strings.Contains(msg, "Connection refused") || strings.Contains(msg, "connection refused") || strings.Contains(msg, "Fetching") {
-		return fmt.Errorf("Let's Encrypt could not connect to port 443 on your domain. Check the router's port forwarding and the Windows firewall: %w", err)
+		return fmt.Errorf("Let's Encrypt could not connect to your domain. Forward both port 80 and port 443 to this PC and allow both in the Windows firewall: %w", err)
 	}
 	return err
 }
