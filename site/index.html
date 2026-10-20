@@ -1,0 +1,218 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Prism Relay: downloads and setup guide</title>
+<meta name="description" content="Download the Prism Launcher relay edition for Mac and follow the setup guide to connect it to relay.qctechnicalconsulting.com.">
+<meta name="color-scheme" content="light dark">
+<link rel="icon" href="favicon.svg" type="image/svg+xml">
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+<a class="skip" href="#download">Skip to downloads</a>
+
+<header class="top">
+  <div class="wrap bar">
+    <a class="brand" href="#top" aria-label="Prism Relay home">
+      <svg viewBox="0 0 32 32" width="28" height="28" aria-hidden="true"><path d="M16 3 28 10v12L16 29 4 22V10z" fill="none" stroke="currentColor" stroke-width="2" stroke-linejoin="round"/><path d="M4 10l12 7 12-7M16 17v12" fill="none" stroke="currentColor" stroke-width="2" stroke-linejoin="round"/></svg>
+      <span>Prism Relay</span>
+    </a>
+    <nav aria-label="Page sections">
+      <a href="#download">Download</a>
+      <a href="#setup">Set up</a>
+      <a href="#help">Help</a>
+      <a href="#own">Run your own</a>
+    </nav>
+  </div>
+</header>
+
+<main id="top">
+  <section class="hero">
+    <div class="wrap">
+      <p class="eyebrow">Prism Launcher, relay edition</p>
+      <h1>Play Minecraft through a relay.</h1>
+      <p class="lead">A build of Prism Launcher that sends all of its network traffic through a relay server, so it never connects to Mojang or Microsoft directly. Download it, enter the relay address and your access token, and you're set.</p>
+      <p class="hero-actions">
+        <a class="btn primary" href="#download">Download</a>
+        <a class="btn ghost" href="#setup">Read the setup guide</a>
+      </p>
+    </div>
+  </section>
+
+  <section id="download" class="wrap section">
+    <h2>Download</h2>
+    <p class="sub">Most people only need the Mac app. The Windows download is for running your own relay.</p>
+
+    <div id="os-note" class="notice" role="status" hidden></div>
+
+    <div class="cards">
+      <article class="card" id="card-mac">
+        <span class="badge" id="badge-mac" hidden>Recommended for your computer</span>
+        <h3>Prism Launcher for Mac</h3>
+        <p class="meta">Apple silicon (M1 or newer) &middot; macOS 12 or later &middot; about 35 MB</p>
+        <p>The launcher itself. This is what you use to play.</p>
+        <a class="btn primary wide" id="dl-mac" href="https://github.com/fpm8588/specialprismlauncher/releases/download/macos-latest/PrismLauncher-macOS-arm64.dmg" download="PrismLauncher-macOS-arm64.dmg" data-name="the Mac app">
+          <svg viewBox="0 0 24 24" width="20" height="20" aria-hidden="true"><path d="M12 3v12m0 0 5-5m-5 5-5-5M4 20h16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>
+          Download for Mac (.dmg)
+        </a>
+        <p class="fine">Does not run on Intel Macs. After downloading, see <a href="#setup">step 1</a> for the one-time approval macOS asks for.</p>
+      </article>
+
+      <article class="card" id="card-win">
+        <span class="badge quiet">Advanced</span>
+        <h3>Relay server for Windows</h3>
+        <p class="meta">Windows 10 or later, 64-bit &middot; about 8 MB</p>
+        <p>Only needed if you want to host a relay on your own computer. You don't need it to connect to this one.</p>
+        <a class="btn wide" id="dl-win" href="https://github.com/fpm8588/specialprismlauncher/releases/download/windows-latest/prism-relay.exe" download="prism-relay.exe" data-name="the Windows relay server">
+          <svg viewBox="0 0 24 24" width="20" height="20" aria-hidden="true"><path d="M12 3v12m0 0 5-5m-5 5-5-5M4 20h16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>
+          Download for Windows (.exe)
+        </a>
+        <p class="fine">Windows SmartScreen may say it protected your PC. Choose <em>More info</em>, then <em>Run anyway</em>.</p>
+      </article>
+    </div>
+    <p id="dl-status" class="status" role="status" aria-live="polite" hidden></p>
+  </section>
+
+  <section id="setup" class="wrap section">
+    <h2>Set up the Mac app</h2>
+    <p class="sub">Four steps. You'll need an access token from the person who shared this page.</p>
+
+    <ol class="steps">
+      <li>
+        <div class="num" aria-hidden="true">1</div>
+        <div class="body">
+          <h3>Install and open it</h3>
+          <p>Open the downloaded <code>.dmg</code> file and drag <strong>Prism Launcher</strong> into your Applications folder. Then open it from there.</p>
+          <div class="callout">
+            <strong>macOS will refuse the first time.</strong> It says it can't verify the app, because the app isn't notarized by Apple. That's expected. To allow it once:
+            <ol>
+              <li>Open <strong>System Settings</strong> and go to <strong>Privacy &amp; Security</strong>.</li>
+              <li>Scroll down to the message about <em>Prism Launcher</em> being blocked and click <strong>Open Anyway</strong>.</li>
+              <li>Enter your Mac's password, then click <strong>Open</strong>.</li>
+            </ol>
+            After that it opens normally. On older macOS versions, right-click the app and choose <strong>Open</strong> instead.
+          </div>
+        </div>
+      </li>
+
+      <li>
+        <div class="num" aria-hidden="true">2</div>
+        <div class="body">
+          <h3>Open the settings</h3>
+          <p>In the launcher, press <kbd>&#8984;</kbd> <kbd>,</kbd> (Command and comma), or choose <strong>Settings</strong> from the Prism Launcher menu. Click <strong>Services</strong> in the list on the left. The <strong>Relay Server</strong> box is at the top of that page.</p>
+        </div>
+      </li>
+
+      <li>
+        <div class="num" aria-hidden="true">3</div>
+        <div class="body">
+          <h3>Enter the address and your token</h3>
+          <p>Fill in the two fields of the Relay Server box:</p>
+
+          <div class="mock" role="img" aria-label="The Relay Server box in the launcher settings, with the address filled in and the token hidden">
+            <div class="mock-title">Relay Server</div>
+            <div class="mock-note">Send all network requests through your own relay server instead of connecting directly.</div>
+            <div class="mock-field">https://relay.qctechnicalconsulting.com</div>
+            <div class="mock-field dots">&bull;&bull;&bull;&bull;&bull;&bull;&bull;&bull;&bull;&bull;&bull;&bull;&bull;&bull;&bull;&bull;&bull;&bull;&bull;&bull;</div>
+            <div class="mock-buttons"><span>Cancel</span><span class="ok">OK</span></div>
+          </div>
+
+          <dl class="fields">
+            <dt>First field: address</dt>
+            <dd>
+              <span class="copyrow"><code id="relay-url">https://relay.qctechnicalconsulting.com</code>
+              <button type="button" class="copy" data-copy="relay-url">Copy</button></span>
+              Type it exactly like this: starting with <code>https://</code>, with no port number and no slash on the end.
+            </dd>
+            <dt>Second field: token</dt>
+            <dd>Paste the access token you were given. It's a long string of letters and numbers. Treat it like a password, and don't post it anywhere.</dd>
+          </dl>
+          <p>Click <strong>OK</strong>. The change applies straight away, so there's no need to restart.</p>
+        </div>
+      </li>
+
+      <li>
+        <div class="num" aria-hidden="true">4</div>
+        <div class="body">
+          <h3>Sign in and play</h3>
+          <p>Go to <strong>Settings &rarr; Accounts</strong> and add your Microsoft account. The launcher shows a short code and asks you to enter it at <strong>microsoft.com/link</strong>. That page opens in your web browser, which doesn't use the relay, so if your network blocks it, type the code on your phone instead.</p>
+          <p>Then create or open an instance and launch it. The first launch downloads Minecraft and its libraries through the relay, so it can take a few minutes.</p>
+        </div>
+      </li>
+    </ol>
+  </section>
+
+  <section class="wrap section" aria-labelledby="know">
+    <h2 id="know">Good to know</h2>
+    <div class="know">
+      <div>
+        <h3>What the relay can see</h3>
+        <p>Everything the launcher sends goes through the relay, so whoever runs it can see which sites the launcher contacts, and your Microsoft and Minecraft sign-in tokens pass through it. Only use a relay run by someone you trust, and only use this one if you're comfortable with that.</p>
+      </div>
+      <div>
+        <h3>What doesn't go through it</h3>
+        <p>The game itself runs as a separate program, so joining an online multiplayer server doesn't use the relay. Neither does the sign-in page you open in your browser.</p>
+      </div>
+      <div>
+        <h3>It only allows known sites</h3>
+        <p>The relay only forwards to a list of approved websites. If something fails to download, the owner may need to add that site to the list.</p>
+      </div>
+    </div>
+  </section>
+
+  <section id="help" class="wrap section">
+    <h2>Troubleshooting</h2>
+    <div class="faq">
+      <details>
+        <summary>The Mac says the app can't be opened or can't be verified</summary>
+        <p>Follow the approval steps in <a href="#setup">step 1</a>: <strong>System Settings &rarr; Privacy &amp; Security &rarr; Open Anyway</strong>. If your Mac is managed by a school or an employer, that option may be turned off, and you'd need to ask whoever manages it.</p>
+      </details>
+      <details>
+        <summary>Requests fail with "Host unreachable" or a timeout</summary>
+        <p>The launcher can't reach the relay. Check that the address is exactly <code>https://relay.qctechnicalconsulting.com</code>, then open it in your browser with <code>/healthz</code> on the end. If the page shows the word <code>unauthorized</code>, the relay is up and the problem is on your side. If it doesn't load, the relay may be offline, or your network may be blocking it.</p>
+      </details>
+      <details>
+        <summary>I get "unauthorized" or a wrong token error</summary>
+        <p>The token is wrong, or it has been changed. Copy it again with nothing extra at the start or end, and paste it into the second field. If it still fails, ask for a new one.</p>
+      </details>
+      <details>
+        <summary>A download fails and the error mentions a site I don't know</summary>
+        <p>The relay refused that site because it isn't on its approved list. Tell the person who runs the relay which site it was, and they can allow it. Downloads of Java and of some mods come from sites that may need adding.</p>
+      </details>
+      <details>
+        <summary>Every request fails and mentions relay-not-configured.invalid</summary>
+        <p>The address or token in Settings is empty or mistyped. The launcher blocks everything on purpose in that case, so nothing is sent without going through the relay. Re-enter both fields.</p>
+      </details>
+      <details>
+        <summary>The game won't start because a library file is damaged</summary>
+        <p>A library that didn't download properly can be left behind. In Finder, press <kbd>&#8679;</kbd> <kbd>&#8984;</kbd> <kbd>G</kbd> and open <code>~/Library/Application Support/PrismLauncher/libraries</code>. Move the damaged file named in the error to the Trash, then launch again so the launcher downloads it fresh.</p>
+      </details>
+    </div>
+  </section>
+
+  <section id="own" class="wrap section">
+    <h2>Run your own relay</h2>
+    <p class="sub">Optional. For people who want to host their own relay instead of using this one.</p>
+    <div class="own">
+      <ol>
+        <li>Download <strong>prism-relay.exe</strong> above and run it on a Windows PC that stays on. Your browser opens its admin page.</li>
+        <li>Point a domain name at your home internet connection, and forward TCP ports <strong>443</strong> and <strong>80</strong> on your router to the PC.</li>
+        <li>On the admin page's <strong>Server</strong> tab, enter the domain, keep <strong>Automatic</strong> selected, and press <strong>Start relay</strong>, then <strong>Check certificate</strong>.</li>
+        <li>Copy the address and token from the <strong>Connect</strong> tab into the launcher.</li>
+      </ol>
+      <p>The full guide, with troubleshooting for each step, is in the project's <a href="https://github.com/fpm8588/specialprismlauncher/tree/main/relay" rel="noopener">relay documentation</a>.</p>
+    </div>
+  </section>
+</main>
+
+<footer class="foot">
+  <div class="wrap">
+    <p>This is an unofficial build, based on <a href="https://prismlauncher.org" rel="noopener">Prism Launcher</a>, which is free software under the GNU GPL v3. The source for this build is at <a href="https://github.com/fpm8588/specialprismlauncher" rel="noopener">github.com/fpm8588/specialprismlauncher</a>.</p>
+    <p>Not affiliated with, endorsed by, or supported by Mojang, Microsoft, or the Prism Launcher project. Minecraft is a trademark of Mojang Synergies AB.</p>
+  </div>
+</footer>
+
+<script src="script.js" defer></script>
+</body>
+</html>

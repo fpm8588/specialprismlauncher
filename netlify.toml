@@ -1,0 +1,4 @@
+# Netlify settings for the downloads site (downloads.qctechnicalconsulting.com).
+# There is nothing to build: the site is the plain files in site/.
+[build]
+  publish = "site"
