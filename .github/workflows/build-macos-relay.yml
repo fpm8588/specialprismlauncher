@@ -31,7 +31,8 @@ jobs:
     name: Build (macOS, Apple silicon)
 
     permissions:
-      contents: read
+      # write: the last step publishes the app as a GitHub release
+      contents: write
       # Required for the vcpkg binary cache (used for Debug builds)
       packages: write
 
@@ -110,7 +111,7 @@ jobs:
           if [ "$status" -ne 0 ]; then
             names=$(grep -E 'Test +#[0-9]+: .*(Failed|\*\*\*)|tests failed|The following tests FAILED|^\s+[0-9]+ - ' ctest.log | head -40 | sed 's/%/%25/g' | awk '{printf "%s%%0A", $0}')
             echo "::warning title=Tests failed::${names}"
-            detail=$(grep -n -B3 -A30 -E 'FAIL!|Failed|\*\*\*' ctest.log | head -120 | sed 's/%/%25/g' | awk '{printf "%s%%0A", $0}')
+            detail=$(grep -n -B2 -A8 -E 'FAIL! |XFAIL|\*\*\*Failed|\*\*\*Exception|\*\*\*Timeout' ctest.log | head -120 | sed 's/%/%25/g' | awk '{printf "%s%%0A", $0}')
             echo "::warning title=Failure details::${detail}"
           fi
           exit "$status"
@@ -134,3 +135,20 @@ jobs:
           version: ${{ steps.short-version.outputs.version }}
           build-type: ${{ steps.setup-dependencies.outputs.build-type }}
           artifact-name: macOS
+
+      # Publishes the app at a permanent public address, so it can be fetched with curl from any computer:
+      #   https://github.com/<owner>/<repo>/releases/download/macos-latest/PrismLauncher-macOS-arm64.dmg
+      # A file downloaded with curl, or copied from a USB drive, carries no "downloaded from the internet"
+      # flag, so macOS does not show the "Apple could not verify" message for it. A browser download does.
+      - name: Publish release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          mv PrismLauncher.dmg PrismLauncher-macOS-arm64.dmg
+          mv PrismLauncher.zip PrismLauncher-macOS-arm64.zip
+          gh release delete macos-latest --cleanup-tag --yes --repo "$GITHUB_REPOSITORY" || true
+          gh release create macos-latest PrismLauncher-macOS-arm64.dmg PrismLauncher-macOS-arm64.zip \
+            --repo "$GITHUB_REPOSITORY" \
+            --target "$GITHUB_SHA" \
+            --title "macOS app (Apple silicon), build ${{ steps.short-version.outputs.version }}" \
+            --notes "Prism Launcher fork with relay support, built for Apple silicon. Not notarized by Apple."
