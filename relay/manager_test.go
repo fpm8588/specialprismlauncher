@@ -9,6 +9,7 @@ import (
 	"crypto/x509"
 	"crypto/x509/pkix"
 	"encoding/pem"
+	"errors"
 	"io"
 	"math/big"
 	"net"
@@ -19,6 +20,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"golang.org/x/crypto/acme"
 )
 
 func freeAddr(t *testing.T) string {
@@ -455,5 +458,50 @@ func TestNeededPorts(t *testing.T) {
 	}
 	if got := neededPorts(Settings{TLSMode: TLSFiles}); len(got) != 1 || got[0] != 8443 {
 		t.Errorf("files: %v", got)
+	}
+}
+
+func TestDescribeAuthorizationAndHints(t *testing.T) {
+	a := &acme.Authorization{Challenges: []*acme.Challenge{
+		{Type: "http-01", Error: &acme.Error{Detail: "173.215.17.142: Fetching http://prism.example.com/.well-known/acme-challenge/x: Timeout during connect (likely firewall problem)"}},
+		{Type: "dns-01"}, // not attempted: no error, must be skipped
+		{Type: "tls-alpn-01", Error: &acme.Error{Detail: "Connection refused"}},
+	}}
+	got := describeAuthorization(a)
+	if !strings.Contains(got, "http-01: 173.215.17.142: Fetching") || !strings.Contains(got, "tls-alpn-01: Connection refused") || strings.Contains(got, "dns-01") {
+		t.Errorf("describeAuthorization = %q", got)
+	}
+	cases := map[string]string{
+		"Timeout during connect (likely firewall problem)": "not reachable",
+		"Connection refused":                           "nothing accepted",
+		"CAA record for example.com prevents issuance": "CAA",
+		"No valid A or AAAA records found":             "A record",
+		"Invalid response from http://x: 404":          "not this relay",
+	}
+	for reason, want := range cases {
+		if h := reasonHint(reason); !strings.Contains(h, want) {
+			t.Errorf("reasonHint(%q) = %q, want mention of %q", reason, h, want)
+		}
+	}
+	if reasonHint("something unrecognised") != "" {
+		t.Error("unknown reasons must not get a made-up hint")
+	}
+}
+
+func TestLetsEncryptReasonIgnoresOtherFailures(t *testing.T) {
+	ctx := context.Background()
+	if r := letsEncryptReason(ctx, t.TempDir(), true, errors.New("something else entirely")); r != "" {
+		t.Errorf("unrelated error produced %q", r)
+	}
+	// the failure names an authorization, but there is no cached account key to ask with
+	failure := errors.New(`acme/autocert: unable to satisfy "https://acme-staging-v02.api.letsencrypt.org/acme/authz/1/2" for domain "x.example.com": no viable challenge type found`)
+	if r := letsEncryptReason(ctx, t.TempDir(), true, failure); r != "" {
+		t.Errorf("missing key produced %q", r)
+	}
+	if !authzRe.MatchString(failure.Error()) {
+		t.Error("the authorization address must be extractable from the real error text")
+	}
+	if got := certFailure("", failure).Error(); !strings.Contains(got, "port 80") {
+		t.Errorf("with no reason, the generic advice must remain: %q", got)
 	}
 }

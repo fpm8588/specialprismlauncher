@@ -361,7 +361,13 @@ func (m *Manager) CheckCertificate() (CertInfo, error) {
 	select {
 	case r := <-ch:
 		if r.err != nil {
-			return CertInfo{}, explainCertError(r.err)
+			ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+			reason := letsEncryptReason(ctx, filepath.Join(m.Dir, certDirName(s)), s.LetsEncryptStaging, r.err)
+			cancel()
+			if reason != "" {
+				m.note(KindError, "certificate check failed; Let's Encrypt said: "+reason)
+			}
+			return CertInfo{}, certFailure(reason, r.err)
 		}
 		return certInfo(*r.cert, s.Domain, s.LetsEncryptStaging)
 	case <-time.After(90 * time.Second):
