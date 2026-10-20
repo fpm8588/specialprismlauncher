@@ -18,24 +18,24 @@ import (
 // Encrypt records the reason for each challenge it tried on that authorization, so it can be asked afterwards.
 var authzRe = regexp.MustCompile(`unable to satisfy "([^"]+)"`)
 
-// letsEncryptReason asks the CA why the authorization named in failure did not validate. It returns "" if the
-// failure is of another kind or the answer cannot be fetched.
-func letsEncryptReason(ctx context.Context, cacheDir string, staging bool, failure error) string {
+// letsEncryptReason asks the CA why the authorization named in failure did not validate. The reason is "" when
+// the failure is of another kind or the CA recorded none; err says why the question could not be asked.
+func letsEncryptReason(ctx context.Context, cacheDir string, staging bool, failure error) (string, error) {
 	m := authzRe.FindStringSubmatch(failure.Error())
 	if m == nil {
-		return ""
+		return "", nil // not a validation failure: nothing to look up
 	}
 	data, err := autocert.DirCache(cacheDir).Get(ctx, "acme_account+key")
 	if err != nil {
-		return ""
+		return "", fmt.Errorf("account key not found in %s: %w", cacheDir, err)
 	}
 	block, _ := pem.Decode(data)
 	if block == nil {
-		return ""
+		return "", errors.New("account key is not valid PEM")
 	}
 	key, err := x509.ParseECPrivateKey(block.Bytes)
 	if err != nil {
-		return ""
+		return "", fmt.Errorf("account key unreadable: %w", err)
 	}
 	directory := acme.LetsEncryptURL
 	if staging {
@@ -44,9 +44,9 @@ func letsEncryptReason(ctx context.Context, cacheDir string, staging bool, failu
 	client := &acme.Client{Key: key, DirectoryURL: directory}
 	authz, err := client.GetAuthorization(ctx, m[1])
 	if err != nil {
-		return ""
+		return "", fmt.Errorf("asking Let's Encrypt failed: %w", err)
 	}
-	return describeAuthorization(authz)
+	return describeAuthorization(authz), nil
 }
 
 // describeAuthorization lists, for each challenge that failed, its type and the CA's own explanation.
@@ -89,9 +89,13 @@ func reasonHint(reason string) string {
 }
 
 // certFailure builds the message shown on the Server tab.
-func certFailure(reason string, original error) error {
+func certFailure(reason string, lookupErr, original error) error {
 	if reason == "" {
-		return explainCertError(original)
+		base := explainCertError(original)
+		if lookupErr != nil {
+			return fmt.Errorf("%w [could not fetch Let's Encrypt's reason: %v]", base, lookupErr)
+		}
+		return fmt.Errorf("%w [Let's Encrypt recorded no reason; watch the Activity tab for its connection attempts]", base)
 	}
 	msg := "Let's Encrypt tried to verify your domain and reported: " + reason
 	if hint := reasonHint(reason); hint != "" {

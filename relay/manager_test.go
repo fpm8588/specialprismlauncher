@@ -418,6 +418,16 @@ func TestAutomaticModeAnswersHTTPChallengeOnPort80(t *testing.T) {
 	if resp.StatusCode < 300 || resp.StatusCode > 399 || !strings.HasPrefix(resp.Header.Get("Location"), "https://") {
 		t.Errorf("plain-port request: %d to %q, want a redirect to https", resp.StatusCode, resp.Header.Get("Location"))
 	}
+	evs, _ := m.Events.Since(0, 100)
+	sawVisitor := false
+	for _, e := range evs {
+		if e.Host == "(port 80)" && strings.Contains(e.Note, "redirected") {
+			sawVisitor = true
+		}
+	}
+	if !sawVisitor {
+		t.Error("a visitor on port 80 should appear in the activity log")
+	}
 	// the challenge path is handled by autocert (an unknown token is refused with 403), not redirected
 	resp, err = noRedirect.Get("http://" + m.httpAddr + "/.well-known/acme-challenge/unknown-token")
 	if err != nil {
@@ -426,6 +436,16 @@ func TestAutomaticModeAnswersHTTPChallengeOnPort80(t *testing.T) {
 	resp.Body.Close()
 	if resp.StatusCode != http.StatusForbidden {
 		t.Errorf("unknown challenge token: %d, want 403 from the ACME handler (a redirect would break validation)", resp.StatusCode)
+	}
+	evs, _ = m.Events.Since(0, 100)
+	sawChallenge := false
+	for _, e := range evs {
+		if strings.Contains(e.Note, "(http-01)") && strings.Contains(e.Path, "acme-challenge") {
+			sawChallenge = true
+		}
+	}
+	if !sawChallenge {
+		t.Error("a Let's Encrypt challenge request should appear in the activity log")
 	}
 
 	m.Stop()
@@ -490,18 +510,47 @@ func TestDescribeAuthorizationAndHints(t *testing.T) {
 
 func TestLetsEncryptReasonIgnoresOtherFailures(t *testing.T) {
 	ctx := context.Background()
-	if r := letsEncryptReason(ctx, t.TempDir(), true, errors.New("something else entirely")); r != "" {
-		t.Errorf("unrelated error produced %q", r)
+	if r, err := letsEncryptReason(ctx, t.TempDir(), true, errors.New("something else entirely")); r != "" || err != nil {
+		t.Errorf("unrelated error produced %q, %v", r, err)
 	}
 	// the failure names an authorization, but there is no cached account key to ask with
 	failure := errors.New(`acme/autocert: unable to satisfy "https://acme-staging-v02.api.letsencrypt.org/acme/authz/1/2" for domain "x.example.com": no viable challenge type found`)
-	if r := letsEncryptReason(ctx, t.TempDir(), true, failure); r != "" {
-		t.Errorf("missing key produced %q", r)
+	r, lookupErr := letsEncryptReason(ctx, t.TempDir(), true, failure)
+	if r != "" || lookupErr == nil || !strings.Contains(lookupErr.Error(), "account key") {
+		t.Errorf("missing key: reason %q, error %v; the failure to look up must be reported, not hidden", r, lookupErr)
 	}
 	if !authzRe.MatchString(failure.Error()) {
 		t.Error("the authorization address must be extractable from the real error text")
 	}
-	if got := certFailure("", failure).Error(); !strings.Contains(got, "port 80") {
-		t.Errorf("with no reason, the generic advice must remain: %q", got)
+	if got := certFailure("", nil, failure).Error(); !strings.Contains(got, "port 80") || !strings.Contains(got, "Activity tab") {
+		t.Errorf("with no reason, the generic advice and a pointer to Activity must remain: %q", got)
 	}
+	if got := certFailure("", errors.New("boom"), failure).Error(); !strings.Contains(got, "could not fetch Let's Encrypt's reason: boom") {
+		t.Errorf("a failed lookup must be named: %q", got)
+	}
+}
+
+func TestLetsEncryptAlpnVisitIsLoggedOnTheMainPort(t *testing.T) {
+	m := newTestManager(t)
+	m.httpAddr = freeAddr(t)
+	addr := freeAddr(t)
+	if _, err := m.Store.Update(func(s *Settings) { s.TLSMode, s.Domain, s.Listen = TLSAuto, "relay.example.com", addr }); err != nil {
+		t.Fatal(err)
+	}
+	if err := m.Start(); err != nil {
+		t.Fatal(err)
+	}
+	// What Let's Encrypt's validator does: a TLS handshake offering the ACME-TLS ALPN protocol. There is no
+	// pending challenge here, so the handshake fails; what matters is that the visit is recorded.
+	conn, err := tls.Dial("tcp", addr, &tls.Config{ServerName: "relay.example.com", NextProtos: []string{"acme-tls/1"}, InsecureSkipVerify: true})
+	if err == nil {
+		conn.Close()
+	}
+	evs, _ := m.Events.Since(0, 100)
+	for _, e := range evs {
+		if strings.Contains(e.Note, "(tls-alpn-01)") {
+			return
+		}
+	}
+	t.Errorf("the tls-alpn-01 visit was not logged: %+v", evs)
 }

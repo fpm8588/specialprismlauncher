@@ -195,7 +195,17 @@ func (m *Manager) startLocked() error {
 			return errors.New("set your domain name first (Server tab)")
 		}
 		m.acm = m.newAutocert(s)
-		srv.TLSConfig = m.acm.TLSConfig() // TLS-ALPN-01 challenge: only port 443 is needed
+		cfg := m.acm.TLSConfig() // handles the TLS-ALPN-01 challenge on the main port
+		inner := cfg.GetCertificate
+		cfg.GetCertificate = func(h *tls.ClientHelloInfo) (*tls.Certificate, error) {
+			for _, proto := range h.SupportedProtos {
+				if proto == acme.ALPNProto {
+					m.record(Event{Kind: KindOK, Client: remoteHost(h.Conn), Note: "Let's Encrypt connected on the main port to verify the domain (tls-alpn-01)"})
+				}
+			}
+			return inner(h)
+		}
+		srv.TLSConfig = cfg
 	case TLSFiles:
 		if s.CertFile == "" || s.KeyFile == "" {
 			return errors.New("choose a certificate file and a key file first (Server tab)")
@@ -247,7 +257,18 @@ func (m *Manager) startChallengeServer() {
 		m.note(KindError, "port 80 is not available ("+friendlyListenError(m.httpAddr, err).Error()+"); certificates will only be requested through the main port")
 		return
 	}
-	srv := &http.Server{Handler: m.acm.HTTPHandler(nil), ReadHeaderTimeout: 10 * time.Second}
+	challenge := m.acm.HTTPHandler(nil)
+	logged := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		ev := Event{Kind: KindOK, Method: r.Method, Host: "(port 80)", Path: r.URL.Path, Client: clientIP(r)}
+		if strings.HasPrefix(r.URL.Path, "/.well-known/acme-challenge/") {
+			ev.Note = "Let's Encrypt connected on port 80 to verify the domain (http-01)"
+		} else {
+			ev.Note = "plain-http visitor, redirected to https"
+		}
+		m.record(ev)
+		challenge.ServeHTTP(w, r)
+	})
+	srv := &http.Server{Handler: logged, ReadHeaderTimeout: 10 * time.Second}
 	m.challengeSrv = srv
 	m.note(KindOK, "listening on "+ln.Addr().String()+" for Let's Encrypt")
 	go func() {
@@ -362,12 +383,15 @@ func (m *Manager) CheckCertificate() (CertInfo, error) {
 	case r := <-ch:
 		if r.err != nil {
 			ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
-			reason := letsEncryptReason(ctx, filepath.Join(m.Dir, certDirName(s)), s.LetsEncryptStaging, r.err)
+			reason, lookupErr := letsEncryptReason(ctx, filepath.Join(m.Dir, certDirName(s)), s.LetsEncryptStaging, r.err)
 			cancel()
-			if reason != "" {
+			switch {
+			case reason != "":
 				m.note(KindError, "certificate check failed; Let's Encrypt said: "+reason)
+			case lookupErr != nil:
+				m.note(KindError, "certificate check failed; could not fetch Let's Encrypt's reason: "+lookupErr.Error())
 			}
-			return CertInfo{}, certFailure(reason, r.err)
+			return CertInfo{}, certFailure(reason, lookupErr, r.err)
 		}
 		return certInfo(*r.cert, s.Domain, s.LetsEncryptStaging)
 	case <-time.After(90 * time.Second):
@@ -470,4 +494,16 @@ func LANAddresses() []string {
 func fileExists(path string) bool {
 	_, err := os.Stat(path)
 	return err == nil
+}
+
+// remoteHost returns the peer address of c without its port, or "" if there is no connection.
+func remoteHost(c net.Conn) string {
+	if c == nil {
+		return ""
+	}
+	h, _, err := net.SplitHostPort(c.RemoteAddr().String())
+	if err != nil {
+		return c.RemoteAddr().String()
+	}
+	return h
 }
