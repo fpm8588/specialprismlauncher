@@ -1,0 +1,65 @@
+name: Build relay server (Windows)
+
+# Tests the relay, builds prism-relay.exe for 64-bit Windows, and publishes it as the "windows-latest"
+# release, so it can be downloaded at a permanent address:
+#   https://github.com/<owner>/<repo>/releases/download/windows-latest/prism-relay.exe
+#
+# Runs when relay/ changes on main, or from the Actions tab: "Build relay server (Windows)" -> Run workflow.
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+    paths:
+      - "relay/**"
+      - ".github/workflows/build-relay-windows.yml"
+
+concurrency:
+  group: ${{ github.workflow }}
+  cancel-in-progress: true
+
+permissions: {}
+
+jobs:
+  build:
+    name: Build and publish
+    runs-on: ubuntu-latest
+    permissions:
+      # write: the last step publishes the exe as a GitHub release
+      contents: write
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: relay/go.mod
+          cache-dependency-path: relay/go.sum
+
+      - name: Test
+        working-directory: relay
+        run: go test -count=1 ./...
+
+      - name: Build prism-relay.exe
+        working-directory: relay
+        env:
+          CGO_ENABLED: "0"
+          GOOS: windows
+          GOARCH: amd64
+        run: |
+          version="1.0-$(git rev-parse --short HEAD)"
+          go build -trimpath -ldflags="-s -w -X main.version=${version}" -o prism-relay.exe .
+          ls -l prism-relay.exe
+
+      - name: Publish release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release delete windows-latest --cleanup-tag --yes --repo "$GITHUB_REPOSITORY" || true
+          gh release create windows-latest relay/prism-relay.exe \
+            --repo "$GITHUB_REPOSITORY" \
+            --target "$GITHUB_SHA" \
+            --title "Relay server for Windows (64-bit)" \
+            --notes "prism-relay.exe: the relay server with its admin page. Windows 10 or newer, 64-bit. Not code-signed, so Windows SmartScreen may ask you to choose More info, then Run anyway."
