@@ -167,7 +167,7 @@ void APIPage::applySettings()
     s->set("PastebinType", ui->pasteTypeComboBox->currentData().toInt());
     s->set("PastebinCustomAPIBase", ui->baseURLEntry->text());
 
-    // Deliberately not upgraded from http to https like the URLs below: the manager refuses a non-loopback http relay itself.
+    // Deliberately not upgraded from http to https like the URLs below: a plain-http relay is allowed (its owner's choice).
     s->set("RelayURL", ui->relayURL->text().trimmed());
     s->set("RelayToken", ui->relayToken->text().trimmed());
     APPLICATION->updateRelaySettings();

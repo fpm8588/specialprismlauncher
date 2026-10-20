@@ -115,6 +115,8 @@ func TestPrismURLAndPorts(t *testing.T) {
 		{Settings{TLSMode: TLSFiles, Domain: "relay.example.com", Listen: ":443"}, "https://relay.example.com", 443},
 		{Settings{TLSMode: TLSPlain}, "http://127.0.0.1:8080", 8080},
 		{Settings{TLSMode: TLSPlain, Listen: "0.0.0.0:9000"}, "http://127.0.0.1:9000", 9000},
+		{Settings{TLSMode: TLSPlain, Listen: ":9000", Domain: "prism.example.com"}, "http://prism.example.com:9000", 9000},
+		{Settings{TLSMode: TLSPlain, Listen: "127.0.0.1:9000", Domain: "prism.example.com"}, "http://127.0.0.1:9000", 9000},
 	}
 	for _, c := range cases {
 		if got := c.s.PrismURL(); got != c.url {

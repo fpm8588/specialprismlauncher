@@ -75,7 +75,11 @@ func (s Settings) ListenPort() int {
 func (s Settings) PrismURL() string {
 	switch s.TLSMode {
 	case TLSPlain:
-		return "http://" + net.JoinHostPort(hostOrLoopback(s.ListenAddr()), strconv.Itoa(s.ListenPort()))
+		host := hostOrLoopback(s.ListenAddr())
+		if s.Domain != "" && host == "127.0.0.1" && !strings.HasPrefix(s.ListenAddr(), "127.") {
+			host = s.Domain // listening on all addresses: reachable by the domain name
+		}
+		return "http://" + net.JoinHostPort(host, strconv.Itoa(s.ListenPort()))
 	default:
 		if s.Domain == "" {
 			return ""

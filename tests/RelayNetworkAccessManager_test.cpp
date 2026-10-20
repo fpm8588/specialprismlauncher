@@ -104,6 +104,8 @@ class RelayNetworkAccessManagerTest : public QObject {
         QTest::newRow("default port dropped") << "https://example.com:443/x" << relay << "https://home.example.com/r/example.com/x";
         QTest::newRow("http is relayed as https") << "http://textures.minecraft.net/texture/abc" << relay
                                                   << "https://home.example.com/r/textures.minecraft.net/texture/abc";
+        QTest::newRow("plain-http relay") << "https://libraries.minecraft.net/x.jar" << "http://203.0.113.9:8080"
+                                         << "http://203.0.113.9:8080/r/libraries.minecraft.net/x.jar";
         QTest::newRow("relay with path prefix and port")
             << "https://piston-meta.mojang.com/v1/packages/abc/manifest.json" << "https://home.example.com:8443/prism/"
             << "https://home.example.com:8443/prism/r/piston-meta.mojang.com/v1/packages/abc/manifest.json";
@@ -147,7 +149,10 @@ class RelayNetworkAccessManagerTest : public QObject {
         QVERIFY(manager.routesThroughRelay());
         QVERIFY(!manager.relayReady());
 
-        manager.configure("http://home.example.com", "a-token");  // plain http to a non-loopback host would expose the token
+        manager.configure("http://home.example.com", "a-token");  // plain http is allowed for any address (the owner's choice)
+        QVERIFY(manager.relayReady());
+
+        manager.configure("ftp://home.example.com", "a-token");  // other schemes are not
         QVERIFY(manager.routesThroughRelay());
         QVERIFY(!manager.relayReady());
 

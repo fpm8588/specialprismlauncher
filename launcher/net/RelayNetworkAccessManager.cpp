@@ -55,9 +55,10 @@ void RelayNetworkAccessManager::configure(const QString& relayUrl, const QString
     }
 
     const QUrl base(trimmedUrl, QUrl::StrictMode);
-    const bool schemeOk = base.scheme() == "https" || (base.scheme() == "http" && isLoopbackHost(base.host()));
+    const bool schemeOk = base.scheme() == "https" || base.scheme() == "http";
     if (!base.isValid() || base.host().isEmpty() || !schemeOk) {
-        qWarning() << "Relay URL is not usable (it must be an https:// URL); all network requests will fail until it is fixed:" << trimmedUrl;
+        qWarning() << "Relay URL is not usable (it must start with https:// or http://); all network requests will fail until it is fixed:"
+                   << trimmedUrl;
         m_mode = Mode::FailClosed;
         return;
     }
@@ -65,6 +66,10 @@ void RelayNetworkAccessManager::configure(const QString& relayUrl, const QString
         qWarning() << "A relay is configured but no relay token is set; all network requests will fail until it is set.";
         m_mode = Mode::FailClosed;
         return;
+    }
+
+    if (base.scheme() == "http" && !isLoopbackHost(base.host())) {
+        qWarning() << "The relay address uses plain http://: the relay token and the sign-in tokens that pass through it are sent unencrypted.";
     }
 
     m_relayBase = base;

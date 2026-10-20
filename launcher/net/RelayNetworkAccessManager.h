@@ -41,8 +41,8 @@ class RelayNetworkAccessManager : public QNetworkAccessManager {
 
     /**
      * Set the relay. An empty relayUrl turns the relay off (the manager then behaves like a plain QNetworkAccessManager).
-     * Anything else must be an https URL (http is accepted only for loopback, for local testing) and needs a token;
-     * otherwise the manager enters its fail-closed state.
+     * Anything else must be an http:// or https:// URL and needs a token; otherwise the manager enters its fail-closed
+     * state. Plain http:// works for any address but sends the token and the sign-in tokens unencrypted (a warning is logged).
      */
     void configure(const QString& relayUrl, const QString& token);
 
