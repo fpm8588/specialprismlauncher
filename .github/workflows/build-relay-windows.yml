@@ -69,8 +69,8 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           gh release delete windows-latest --cleanup-tag --yes --repo "$GITHUB_REPOSITORY" || true
-          gh release create windows-latest relay/prism-relay.exe relay/prism-relay-linux-amd64 \
+          gh release create windows-latest relay/prism-relay.exe relay/prism-relay-linux-amd64 relay/deploy/prism-relay.service \
             --repo "$GITHUB_REPOSITORY" \
             --target "$GITHUB_SHA" \
             --title "Relay server for Windows (64-bit)" \
-            --notes "prism-relay.exe: the relay server with its admin page (prism-relay-linux-amd64 is the same program for 64-bit Linux). Windows 10 or newer, 64-bit. Not code-signed, so Windows SmartScreen may ask you to choose More info, then Run anyway."
+            --notes "prism-relay.exe: the relay server with its admin page (prism-relay-linux-amd64 is the same program for 64-bit Linux, and prism-relay.service is its systemd service file). Windows 10 or newer, 64-bit. Not code-signed, so Windows SmartScreen may ask you to choose More info, then Run anyway."
