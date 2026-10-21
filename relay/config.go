@@ -22,7 +22,8 @@ const (
 	TLSPlain = "plain" // no TLS: for testing, or behind a TLS-terminating proxy
 )
 
-// DefaultAdminAddr is where the admin interface listens. It is always loopback.
+// DefaultAdminAddr is where the admin interface listens unless told otherwise (-admin-addr or "adminAddr").
+// It is always loopback or a private network address, never a public one.
 const DefaultAdminAddr = "127.0.0.1:9777"
 
 // Settings is everything the admin interface edits. It is stored as JSON.
@@ -144,7 +145,7 @@ func (s Settings) Validate() error {
 			return fmt.Errorf("%q is not a valid host entry (examples: cdn.example.org, *.example.net)", h)
 		}
 	}
-	if err := checkLoopbackAddr(s.AdminAddr); err != nil {
+	if err := checkAdminAddr(s.AdminAddr); err != nil {
 		return fmt.Errorf("admin address: %w", err)
 	}
 	return nil
@@ -154,17 +155,25 @@ func validDomain(d string) bool {
 	return validHostname(strings.ToLower(d)) && net.ParseIP(d) == nil
 }
 
-func checkLoopbackAddr(addr string) error {
+// privateOrLoopback reports whether ip is this computer or an address that only exists inside a home or office
+// network (192.168.x.x, 10.x.x.x, 172.16-31.x.x, fe80::, fc00::/7).
+func privateOrLoopback(ip net.IP) bool {
+	return ip != nil && (ip.IsLoopback() || ip.IsPrivate() || ip.IsLinkLocalUnicast())
+}
+
+// checkAdminAddr accepts only an address that cannot be reached from the internet: loopback, or one specific
+// private address of this computer (for example 192.168.0.127:9777). 0.0.0.0, public addresses and names are refused.
+func checkAdminAddr(addr string) error {
 	host, _, err := net.SplitHostPort(addr)
 	if err != nil {
-		return fmt.Errorf("%q must look like 127.0.0.1:9777", addr)
+		return fmt.Errorf("%q must look like 127.0.0.1:9777 or 192.168.0.10:9777", addr)
 	}
 	if host == "localhost" {
 		return nil
 	}
 	ip := net.ParseIP(host)
-	if ip == nil || !ip.IsLoopback() {
-		return fmt.Errorf("%q is not a loopback address; the admin interface must not be reachable from the network", addr)
+	if ip == nil || ip.IsUnspecified() || !privateOrLoopback(ip) {
+		return fmt.Errorf("%q is not a loopback or private network address (such as 192.168.0.10); the admin interface must not be reachable from the internet", addr)
 	}
 	return nil
 }

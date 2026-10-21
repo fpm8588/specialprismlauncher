@@ -36,6 +36,7 @@ func main() {
 		genToken   = flag.Bool("gen-token", false, "print a new random token and exit")
 		printList  = flag.Bool("print-allowlist", false, "print the built-in allowlist and exit")
 		showVer    = flag.Bool("version", false, "print the version and exit")
+		adminAddr  = flag.String("admin-addr", "", "where the admin page listens, e.g. 192.168.0.127:9777 (default: the saved setting, 127.0.0.1:9777)")
 	)
 	flag.Parse()
 
@@ -70,6 +71,14 @@ func main() {
 	m, err := NewManager(dir, version)
 	if err != nil {
 		log.Fatalf("cannot start: %v", err)
+	}
+	if *adminAddr != "" {
+		if err := checkAdminAddr(*adminAddr); err != nil {
+			log.Fatalf("-admin-addr: %v", err)
+		}
+		if _, err := m.Store.Update(func(s *Settings) { s.AdminAddr = *adminAddr }); err != nil {
+			log.Fatalf("cannot save -admin-addr: %v", err)
+		}
 	}
 	s := m.Store.Get()
 

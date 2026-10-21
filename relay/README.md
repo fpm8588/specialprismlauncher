@@ -49,6 +49,37 @@ Everything Works". This file is the short version.
    Let's Encrypt certificate.
 6. **Connect tab:** copy the address and token into the launcher (*Settings → APIs → Relay Server*).
 
+## Running on Linux (Ubuntu server)
+
+`prism-relay-linux-amd64` is the same program. It has no window, so it runs as a service, and its
+admin page is opened from another computer on your network.
+
+```
+sudo useradd --system --home /var/lib/prism-relay --shell /usr/sbin/nologin prismrelay
+sudo mkdir -p /opt/prism-relay /var/lib/prism-relay
+sudo install -m 755 prism-relay-linux-amd64 /opt/prism-relay/prism-relay
+sudo install -m 644 prism-relay.service /etc/systemd/system/prism-relay.service   # from relay/deploy/
+sudo chown -R prismrelay:prismrelay /var/lib/prism-relay
+sudo systemctl daemon-reload && sudo systemctl enable --now prism-relay
+sudo journalctl -u prism-relay -n 20 --no-pager      # shows the admin sign-in link
+```
+
+* **The admin page** listens where `-admin-addr` says (the service file uses `192.168.0.127:9777`;
+  change it to the server's own address). Only loopback and private addresses (`192.168.x.x`,
+  `10.x.x.x`, `172.16-31.x.x`) are accepted, and a connection from the internet is refused even if
+  the router forwards the port, so **never forward the admin port**. Open the sign-in link from the
+  journal in a browser on the home network; it is plain http, so use it on your own network only.
+* **Moving from Windows:** stop the relay there, copy the whole `%AppData%\PrismRelay` folder into
+  `/var/lib/prism-relay` (same token, allowlist and certificate, so nothing is re-issued), then
+  `chown -R prismrelay:prismrelay /var/lib/prism-relay` and start the service.
+* **Firewall:** open the relay's ports, for example
+  `sudo firewall-cmd --permanent --add-port=443/tcp --add-port=80/tcp`, and the admin port for the
+  home network only:
+  `sudo firewall-cmd --permanent --add-rich-rule='rule family="ipv4" source address="192.168.0.0/24" port port="9777" protocol="tcp" accept'`,
+  then `sudo firewall-cmd --reload`.
+* If something else on the server already uses port 80 or 443, set the relay's listen address on the
+  Server tab (for example `:8443`) and point the router's external 443 at that port.
+
 ## The admin page
 
 It is served only on `127.0.0.1:9777` and needs a secret key, so only a browser started by the

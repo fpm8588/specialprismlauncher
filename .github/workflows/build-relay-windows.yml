@@ -53,13 +53,24 @@ jobs:
           go build -trimpath -ldflags="-s -w -X main.version=${version}" -o prism-relay.exe .
           ls -l prism-relay.exe
 
+      - name: Build prism-relay for Linux (64-bit)
+        working-directory: relay
+        env:
+          CGO_ENABLED: "0"
+          GOOS: linux
+          GOARCH: amd64
+        run: |
+          version="1.0-$(git rev-parse --short HEAD)"
+          go build -trimpath -ldflags="-s -w -X main.version=${version}" -o prism-relay-linux-amd64 .
+          ls -l prism-relay-linux-amd64
+
       - name: Publish release
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
           gh release delete windows-latest --cleanup-tag --yes --repo "$GITHUB_REPOSITORY" || true
-          gh release create windows-latest relay/prism-relay.exe \
+          gh release create windows-latest relay/prism-relay.exe relay/prism-relay-linux-amd64 \
             --repo "$GITHUB_REPOSITORY" \
             --target "$GITHUB_SHA" \
             --title "Relay server for Windows (64-bit)" \
-            --notes "prism-relay.exe: the relay server with its admin page. Windows 10 or newer, 64-bit. Not code-signed, so Windows SmartScreen may ask you to choose More info, then Run anyway."
+            --notes "prism-relay.exe: the relay server with its admin page (prism-relay-linux-amd64 is the same program for 64-bit Linux). Windows 10 or newer, 64-bit. Not code-signed, so Windows SmartScreen may ask you to choose More info, then Run anyway."

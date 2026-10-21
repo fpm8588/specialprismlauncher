@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"net/http/cookiejar"
 	"net/http/httptest"
+	"net/url"
 	"strings"
 	"testing"
 	"time"
@@ -334,5 +335,49 @@ func TestAdminListsAreNeverNull(t *testing.T) {
 		if _, ok := ss[k].([]any); !ok {
 			t.Errorf("stats.%s = %v, want a list", k, ss[k])
 		}
+	}
+}
+
+func TestAdminAddressMustBeLoopbackOrPrivate(t *testing.T) {
+	for _, ok := range []string{"127.0.0.1:9777", "localhost:9777", "[::1]:9777", "192.168.0.127:9777", "10.1.2.3:9777", "172.16.5.5:9777"} {
+		if err := checkAdminAddr(ok); err != nil {
+			t.Errorf("%s was refused: %v", ok, err)
+		}
+	}
+	for _, bad := range []string{"0.0.0.0:9777", ":9777", "[::]:9777", "173.215.17.151:9777", "8.8.8.8:9777", "example.com:9777", "192.168.0.127"} {
+		if err := checkAdminAddr(bad); err == nil {
+			t.Errorf("%s was accepted", bad)
+		}
+	}
+}
+
+func TestAdminOnAPrivateAddress(t *testing.T) {
+	m := newTestManager(t)
+	a := NewAdmin(m, "/path/to/prism-relay", "192.168.0.127:9777", func() {})
+	if got, want := a.LoginURL(), "http://192.168.0.127:9777/?k="+url.QueryEscape(m.Store.Get().AdminKey); got != want {
+		t.Errorf("login URL %q, want %q", got, want)
+	}
+	h := a.Handler()
+	key := m.Store.Get().AdminKey
+
+	get := func(host, remote string) int {
+		req := httptest.NewRequest("GET", "http://"+host+"/?k="+url.QueryEscape(key), nil)
+		req.Host = host
+		req.RemoteAddr = remote
+		rec := httptest.NewRecorder()
+		h.ServeHTTP(rec, req)
+		return rec.Code
+	}
+	if c := get("192.168.0.127:9777", "192.168.0.50:51000"); c != http.StatusSeeOther {
+		t.Errorf("a computer on the home network got %d, want a sign-in redirect", c)
+	}
+	if c := get("192.168.0.127:9777", "173.215.17.200:51000"); c != http.StatusForbidden {
+		t.Errorf("a connection from the internet got %d, want 403", c)
+	}
+	if c := get("evil.example:9777", "192.168.0.50:51000"); c != http.StatusForbidden {
+		t.Errorf("a made-up Host name got %d, want 403", c)
+	}
+	if c := get("192.168.0.128:9777", "192.168.0.50:51000"); c != http.StatusForbidden {
+		t.Errorf("another address got %d, want 403", c)
 	}
 }

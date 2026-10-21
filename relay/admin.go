@@ -26,11 +26,13 @@ const (
 	adminHeader = "X-Admin"
 )
 
-// Admin serves the admin interface: a page and a small JSON API. It listens on loopback only and
-// refuses requests that do not carry the admin key, so a web page you happen to visit cannot drive it.
+// Admin serves the admin interface: a page and a small JSON API. It listens on loopback or one private network
+// address only, refuses connections that do not come from such an address, and refuses requests that do not
+// carry the admin key, so a web page you happen to visit cannot drive it.
 type Admin struct {
 	m       *Manager
 	exe     string
+	host    string // address the page is served on, as used in the sign-in link
 	port    string
 	quit    func()
 	hostsOK map[string]bool
@@ -38,11 +40,18 @@ type Admin struct {
 	handler http.Handler
 }
 
-// NewAdmin builds the admin handler. addr is the loopback address it will be served on.
+// NewAdmin builds the admin handler. addr is the loopback or private address it will be served on.
 func NewAdmin(m *Manager, exe, addr string, quit func()) *Admin {
-	_, port, _ := net.SplitHostPort(addr)
-	a := &Admin{m: m, exe: exe, port: port, quit: quit, mux: http.NewServeMux(), hostsOK: map[string]bool{}}
-	for _, h := range []string{"127.0.0.1", "localhost", "[::1]"} {
+	host, port, _ := net.SplitHostPort(addr)
+	if host == "" || host == "localhost" {
+		host = "127.0.0.1"
+	}
+	a := &Admin{m: m, exe: exe, host: host, port: port, quit: quit, mux: http.NewServeMux(), hostsOK: map[string]bool{}}
+	names := []string{"127.0.0.1", "localhost", "[::1]", host}
+	if strings.Contains(host, ":") {
+		names[len(names)-1] = "[" + host + "]"
+	}
+	for _, h := range names {
 		a.hostsOK[h+":"+port] = true
 	}
 	a.routes()
@@ -55,7 +64,7 @@ func (a *Admin) Handler() http.Handler { return a.handler }
 
 // LoginURL is the address that signs a browser in (it sets the cookie, then redirects to the page).
 func (a *Admin) LoginURL() string {
-	return "http://127.0.0.1:" + a.port + "/?k=" + url.QueryEscape(a.m.Store.Get().AdminKey)
+	return "http://" + net.JoinHostPort(a.host, a.port) + "/?k=" + url.QueryEscape(a.m.Store.Get().AdminKey)
 }
 
 func (a *Admin) routes() {
@@ -78,11 +87,16 @@ func (a *Admin) routes() {
 	a.mux.HandleFunc("POST /api/quit", a.handleQuit)
 }
 
-// guard rejects anything that is not the signed-in local browser talking to the loopback address.
+// guard rejects anything that is not the signed-in browser of someone on this computer or this network.
 func (a *Admin) guard(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		// A web page on another site can make the browser send requests to 127.0.0.1 under a name it
-		// controls (DNS rebinding). Only our own loopback names are accepted.
+		// Even if the router were set to forward the admin port, a request from the internet is refused.
+		if peer, _, err := net.SplitHostPort(r.RemoteAddr); err != nil || !privateOrLoopback(net.ParseIP(peer)) {
+			http.Error(w, "the admin page is only available from inside the local network", http.StatusForbidden)
+			return
+		}
+		// A web page on another site can make the browser send requests to this address under a name it
+		// controls (DNS rebinding). Only our own addresses are accepted as the Host.
 		if !a.hostsOK[strings.ToLower(r.Host)] {
 			http.Error(w, "unexpected Host header", http.StatusForbidden)
 			return
