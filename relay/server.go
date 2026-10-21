@@ -39,6 +39,10 @@ type Config struct {
 	MaxBody      int64  // max request body accepted from the client
 	MaxRedirects int
 	OnEvent      func(Event) // called for everything the relay does; may be nil
+
+	// Tunnel limits (CONNECT requests carry the game's login connections, never game traffic).
+	TunnelMaxBytes int64         // per direction; 0 means 16 MiB
+	TunnelMaxTime  time.Duration // 0 means 5 minutes
 }
 
 // Server is an authenticated, allowlisted HTTP relay. The token and the
@@ -49,6 +53,7 @@ type Server struct {
 	allow   atomic.Pointer[Allowlist]
 	client  *http.Client
 	limiter *authLimiter
+	dial    func(ctx context.Context, network, addr string) (net.Conn, error)
 }
 
 // NewServer validates cfg and builds a Server.
@@ -65,6 +70,12 @@ func NewServer(cfg Config) (*Server, error) {
 	if cfg.MaxRedirects <= 0 {
 		cfg.MaxRedirects = 8
 	}
+	if cfg.TunnelMaxBytes <= 0 {
+		cfg.TunnelMaxBytes = 16 << 20
+	}
+	if cfg.TunnelMaxTime <= 0 {
+		cfg.TunnelMaxTime = 5 * time.Minute
+	}
 
 	s := &Server{cfg: cfg, limiter: newAuthLimiter(maxAuthFailures, authLockout)}
 	if err := s.SetToken(cfg.Token); err != nil {
@@ -76,6 +87,7 @@ func NewServer(cfg Config) (*Server, error) {
 	if !cfg.AllowPrivate {
 		dialer.Control = refusePrivateAddresses
 	}
+	s.dial = dialer.DialContext
 	transport := &http.Transport{
 		Proxy:                 nil, // never inherit HTTP(S)_PROXY from the environment
 		DialContext:           dialer.DialContext,
@@ -135,6 +147,11 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	s.limiter.succeed(ip)
+
+	if r.Method == http.MethodConnect {
+		s.serveTunnel(w, r, ip, start)
+		return
+	}
 
 	if r.URL.Path == "/healthz" {
 		fmt.Fprintln(w, "ok")
@@ -393,4 +410,83 @@ func (l *authLimiter) succeed(ip string) {
 	l.mu.Lock()
 	defer l.mu.Unlock()
 	delete(l.failures, ip)
+}
+
+// serveTunnel handles "CONNECT host:443". The launcher sends these for the game's login connections (to Mojang's
+// session server): the game cannot be given the relay address, so it talks to a small proxy on the player's computer,
+// which asks the relay for a raw connection to the named host. Only hosts on the allowlist are reachable, on port 443
+// unless the allowlist entry names another port, and each tunnel is capped in bytes and time so it cannot be used to
+// carry bulk traffic. It is never used for game servers.
+func (s *Server) serveTunnel(w http.ResponseWriter, r *http.Request, ip string, start time.Time) {
+	host, port, err := net.SplitHostPort(r.Host)
+	if err != nil || host == "" || !validHost(host) {
+		s.emit(Event{Kind: KindBad, Method: r.Method, Client: ip, Note: "bad tunnel target"})
+		http.Error(w, "bad tunnel target", http.StatusBadRequest)
+		return
+	}
+	host = strings.ToLower(host)
+	name := host
+	if port != "443" {
+		name = net.JoinHostPort(host, port) // only allowed if the allowlist names this exact port
+	}
+	if !s.allow.Load().Match(name) {
+		s.emit(Event{Kind: KindDeny, Method: r.Method, Host: name, Path: "(tunnel)", Client: ip, Note: "host not on allowlist"})
+		http.Error(w, "relay: host not allowed: "+name+" (add it on the Allowed hosts tab)", http.StatusForbidden)
+		return
+	}
+
+	ctx, cancel := context.WithTimeout(r.Context(), 15*time.Second)
+	defer cancel()
+	upstream, err := s.dial(ctx, "tcp", net.JoinHostPort(host, port))
+	if err != nil {
+		s.emit(Event{Kind: KindError, Method: r.Method, Host: name, Path: "(tunnel)", Client: ip,
+			Millis: time.Since(start).Milliseconds(), Note: upstreamErrorText(err)})
+		http.Error(w, "relay: upstream error: "+upstreamErrorText(err), http.StatusBadGateway)
+		return
+	}
+	defer upstream.Close()
+
+	hj, ok := w.(http.Hijacker)
+	if !ok {
+		http.Error(w, "tunnels need HTTP/1.1", http.StatusInternalServerError)
+		return
+	}
+	client, buf, err := hj.Hijack()
+	if err != nil {
+		return
+	}
+	defer client.Close()
+	if _, err := io.WriteString(client, "HTTP/1.1 200 Connection Established\r\n\r\n"); err != nil {
+		return
+	}
+
+	deadline := time.Now().Add(s.cfg.TunnelMaxTime)
+	_ = client.SetDeadline(deadline)
+	_ = upstream.SetDeadline(deadline)
+
+	// bytes the client sent right behind its CONNECT request
+	if n := buf.Reader.Buffered(); n > 0 {
+		pending, _ := buf.Reader.Peek(n)
+		if _, err := upstream.Write(pending); err != nil {
+			return
+		}
+	}
+
+	var down int64
+	done := make(chan struct{}, 2)
+	go func() { // player -> host
+		_, _ = io.Copy(upstream, io.LimitReader(client, s.cfg.TunnelMaxBytes))
+		done <- struct{}{}
+	}()
+	go func() { // host -> player
+		down, _ = io.Copy(client, io.LimitReader(upstream, s.cfg.TunnelMaxBytes))
+		done <- struct{}{}
+	}()
+	<-done // either side finishing (or hitting its cap) ends the tunnel
+	client.Close()
+	upstream.Close()
+	<-done
+
+	s.emit(Event{Kind: KindOK, Method: r.Method, Host: name, Path: "(game login tunnel)", Status: 200, Bytes: down,
+		Millis: time.Since(start).Milliseconds(), Client: ip})
 }

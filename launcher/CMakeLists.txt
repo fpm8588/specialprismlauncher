@@ -146,6 +146,8 @@ set(NET_SOURCES
     net/ApiUpload.h
     net/NetRequest.cpp
     net/NetRequest.h
+    net/LocalSocksProxy.cpp
+    net/LocalSocksProxy.h
     net/RelayNetworkAccessManager.cpp
     net/RelayNetworkAccessManager.h
 )

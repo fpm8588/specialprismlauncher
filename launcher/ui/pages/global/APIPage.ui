@@ -130,6 +130,16 @@
             </property>
            </widget>
           </item>
+          <item>
+           <widget class="QCheckBox" name="relayGameLogin">
+            <property name="toolTip">
+             <string>The game makes a few web requests of its own, such as the login when you join an online server. This sends only those through the relay (the connection to the game server itself is not affected).</string>
+            </property>
+            <property name="text">
+             <string>Also send the game's login (joining online servers) through the relay</string>
+            </property>
+           </widget>
+          </item>
          </layout>
         </widget>
        </item>

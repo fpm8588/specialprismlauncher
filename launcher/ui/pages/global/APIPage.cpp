@@ -142,6 +142,7 @@ void APIPage::loadSettings()
 
     ui->relayURL->setText(s->get("RelayURL").toString());
     ui->relayToken->setText(s->get("RelayToken").toString());
+    ui->relayGameLogin->setChecked(s->get("RelayGameLogin").toBool());
 
     QString msaClientID = s->get("MSAClientIDOverride").toString();
     ui->msaClientID->setText(msaClientID);
@@ -170,6 +171,7 @@ void APIPage::applySettings()
     // Deliberately not upgraded from http to https like the URLs below: a plain-http relay is allowed (its owner's choice).
     s->set("RelayURL", ui->relayURL->text().trimmed());
     s->set("RelayToken", ui->relayToken->text().trimmed());
+    s->set("RelayGameLogin", ui->relayGameLogin->isChecked());
     APPLICATION->updateRelaySettings();
 
     QString msaClientID = ui->msaClientID->text();

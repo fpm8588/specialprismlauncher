@@ -15,6 +15,19 @@ Prism (the Mac)                  your home PC                         the intern
 
 Redirects (GitHub releases, CDNs…) are followed by the relay, so the launcher never sees them.
 
+## Joining online servers (the game's login)
+
+The game itself, not the launcher, makes one web request when you join an online server: the "join"
+call to Mojang's session server. If the network blocks it, the game says *Authentication servers
+are down*. The launcher handles this with a small proxy on the Mac (127.0.0.1 only) that the game is
+told to use for its web requests (`--proxyHost`/`--proxyPort`). The proxy asks the relay for a
+`CONNECT host:443` tunnel, and the relay opens it only for hosts on the allowlist, on port 443 (other
+ports need an explicit `host:port` entry), each tunnel capped at 16 MiB per direction and 5 minutes.
+
+The connection to the Minecraft server itself is a plain socket the proxy never sees, so no game
+traffic reaches your home connection. The Activity tab shows these as `CONNECT … (game login tunnel)`.
+The launcher setting *Also send the game's login through the relay* turns this off.
+
 > Using this to get around a network's filter can break that network's acceptable-use rules.
 > That is your call to make; the relay does nothing to disguise its traffic.
 

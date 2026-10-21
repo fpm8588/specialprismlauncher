@@ -46,6 +46,7 @@
 #include "DataMigrationTask.h"
 #include "java/JavaInstallList.h"
 #include "net/PasteUpload.h"
+#include "net/LocalSocksProxy.h"
 #include "net/RelayNetworkAccessManager.h"
 #include "tasks/Task.h"
 #include "tools/GenericProfiler.h"
@@ -882,6 +883,8 @@ Application::Application(int& argc, char** argv) : QApplication(argc, argv)
         // Relay server that every network request is sent through (empty = connect directly)
         m_settings->registerSetting("RelayURL", "");
         m_settings->registerSetting("RelayToken", "");
+        // Also send the game's own login requests (joining online servers) through the relay, via a local SOCKS proxy
+        m_settings->registerSetting("RelayGameLogin", true);
 
         // Custom Microsoft Authentication Client ID
         m_settings->registerSetting("MSAClientIDOverride", "");
@@ -1819,6 +1822,24 @@ void Application::updateRelaySettings()
     };
     network->configure(fromEnvOr("PRISM_RELAY_URL", settings()->get("RelayURL").toString()),
                        fromEnvOr("PRISM_RELAY_TOKEN", settings()->get("RelayToken").toString()));
+
+    // The game makes a few HTTPS requests itself (above all "join server" at Mojang's session server). They go through a
+    // proxy on this computer that hands them to the relay; the connection to the game server itself is not touched.
+    if (network->relayReady() && settings()->get("RelayGameLogin").toBool()) {
+        if (!m_gameProxy) {
+            m_gameProxy = std::make_unique<LocalSocksProxy>();
+        }
+        if (!m_gameProxy->start(network->relayBase(), network->relayToken())) {
+            qWarning() << "The game login proxy is not running; joining online servers will not work through the relay.";
+        }
+    } else {
+        m_gameProxy.reset();
+    }
+}
+
+quint16 Application::gameProxyPort() const
+{
+    return m_gameProxy ? m_gameProxy->port() : 0;
 }
 
 HttpMetaCache* Application::metacache()

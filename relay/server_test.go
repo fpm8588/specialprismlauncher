@@ -1,12 +1,16 @@
 package main
 
 import (
+	"bufio"
 	"io"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
 	"strings"
+	"sync"
 	"testing"
+	"time"
 )
 
 const testToken = "test-token-0123456789abcdef"
@@ -384,5 +388,161 @@ func TestTokenAndAllowlistCanChangeWhileServing(t *testing.T) {
 	}
 	if err := s.SetToken("short"); err == nil {
 		t.Error("a short token must be refused")
+	}
+}
+
+// ---- CONNECT tunnel (the game's login connections) ----
+
+// connectThroughRelay speaks raw HTTP/1.1 to the relay, as the launcher's local proxy does.
+func connectThroughRelay(t *testing.T, relayURL, target, token string) (net.Conn, *http.Response) {
+	t.Helper()
+	u, _ := url.Parse(relayURL)
+	conn, err := net.Dial("tcp", u.Host)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { conn.Close() })
+	req := "CONNECT " + target + " HTTP/1.1\r\nHost: " + target + "\r\n"
+	if token != "" {
+		req += TokenHeader + ": " + token + "\r\n"
+	}
+	io.WriteString(conn, req+"\r\n")
+	resp, err := http.ReadResponse(bufio.NewReader(conn), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return conn, resp
+}
+
+func newTunnelRelay(t *testing.T, cfg Config) (*httptest.Server, func() []Event) {
+	t.Helper()
+	var events []Event
+	var mu sync.Mutex
+	cfg.Token, cfg.Scheme, cfg.AllowPrivate = testToken, "http", true
+	cfg.OnEvent = func(e Event) { mu.Lock(); events = append(events, e); mu.Unlock() }
+	s, err := NewServer(cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ts := httptest.NewServer(s)
+	t.Cleanup(ts.Close)
+	return ts, func() []Event { mu.Lock(); defer mu.Unlock(); return append([]Event(nil), events...) }
+}
+
+func echoServer(t *testing.T) string {
+	t.Helper()
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { ln.Close() })
+	go func() {
+		for {
+			c, err := ln.Accept()
+			if err != nil {
+				return
+			}
+			go func() { defer c.Close(); io.Copy(c, c) }()
+		}
+	}()
+	return ln.Addr().String()
+}
+
+func TestTunnelCarriesBytesBothWays(t *testing.T) {
+	echo := echoServer(t)
+	ts, events := newTunnelRelay(t, Config{Allow: NewAllowlist([]string{echo})})
+
+	conn, resp := connectThroughRelay(t, ts.URL, echo, testToken)
+	if resp.StatusCode != 200 {
+		t.Fatalf("CONNECT: %d", resp.StatusCode)
+	}
+	io.WriteString(conn, "hello through the tunnel")
+	buf := make([]byte, 24)
+	conn.SetReadDeadline(time.Now().Add(3 * time.Second))
+	if _, err := io.ReadFull(conn, buf); err != nil || string(buf) != "hello through the tunnel" {
+		t.Fatalf("echo = %q, %v", buf, err)
+	}
+	conn.Close()
+	time.Sleep(200 * time.Millisecond)
+
+	found := false
+	for _, e := range events() {
+		if e.Method == "CONNECT" && e.Kind == KindOK && e.Host == echo && e.Bytes == 24 {
+			found = true
+		}
+	}
+	if !found {
+		t.Errorf("tunnel not recorded in the activity log: %+v", events())
+	}
+}
+
+func TestTunnelRefusesWithoutTokenAndForUnlistedHosts(t *testing.T) {
+	echo := echoServer(t)
+	ts, events := newTunnelRelay(t, Config{Allow: NewAllowlist([]string{"sessionserver.mojang.com"})})
+
+	if _, resp := connectThroughRelay(t, ts.URL, echo, ""); resp.StatusCode != http.StatusUnauthorized {
+		t.Errorf("no token: %d, want 401", resp.StatusCode)
+	}
+	if _, resp := connectThroughRelay(t, ts.URL, "evil.example.com:443", testToken); resp.StatusCode != http.StatusForbidden {
+		t.Errorf("unlisted host: %d, want 403", resp.StatusCode)
+	}
+	// a listed host on another port is NOT reachable: the allowlist entry names no port, so only 443 matches
+	if _, resp := connectThroughRelay(t, ts.URL, "sessionserver.mojang.com:25565", testToken); resp.StatusCode != http.StatusForbidden {
+		t.Errorf("listed host, wrong port: %d, want 403 (game servers must never be tunnelled)", resp.StatusCode)
+	}
+	denied := 0
+	for _, e := range events() {
+		if e.Kind == KindDeny && e.Path == "(tunnel)" {
+			denied++
+		}
+	}
+	if denied != 2 {
+		t.Errorf("denied tunnels logged: %d, want 2", denied)
+	}
+}
+
+func TestTunnelRefusesPrivateAddresses(t *testing.T) {
+	echo := echoServer(t)
+	s, _ := NewServer(Config{Token: testToken, Allow: NewAllowlist([]string{echo}), Scheme: "http"}) // AllowPrivate false
+	ts := httptest.NewServer(s)
+	defer ts.Close()
+	if _, resp := connectThroughRelay(t, ts.URL, echo, testToken); resp.StatusCode != http.StatusBadGateway {
+		t.Errorf("loopback target: %d, want 502", resp.StatusCode)
+	}
+}
+
+func TestTunnelIsCappedInBytes(t *testing.T) {
+	echo := echoServer(t)
+	ts, _ := newTunnelRelay(t, Config{Allow: NewAllowlist([]string{echo}), TunnelMaxBytes: 1000})
+
+	conn, resp := connectThroughRelay(t, ts.URL, echo, testToken)
+	if resp.StatusCode != 200 {
+		t.Fatal(resp.StatusCode)
+	}
+	go func() { io.Copy(conn, strings.NewReader(strings.Repeat("x", 100000))) }()
+	conn.SetReadDeadline(time.Now().Add(5 * time.Second))
+	got, _ := io.Copy(io.Discard, conn) // ends when the relay closes the tunnel
+	if got > 1000 {
+		t.Errorf("received %d bytes through a tunnel capped at 1000", got)
+	}
+}
+
+func TestTunnelKeepsBytesSentRightAfterTheRequest(t *testing.T) {
+	echo := echoServer(t)
+	ts, _ := newTunnelRelay(t, Config{Allow: NewAllowlist([]string{echo})})
+	u, _ := url.Parse(ts.URL)
+	conn, _ := net.Dial("tcp", u.Host)
+	defer conn.Close()
+	// pipelined: payload in the same write as the CONNECT request
+	io.WriteString(conn, "CONNECT "+echo+" HTTP/1.1\r\nHost: "+echo+"\r\n"+TokenHeader+": "+testToken+"\r\n\r\nPIPELINED")
+	r := bufio.NewReader(conn)
+	resp, err := http.ReadResponse(r, nil)
+	if err != nil || resp.StatusCode != 200 {
+		t.Fatalf("%v %v", resp, err)
+	}
+	got := make([]byte, 9)
+	conn.SetReadDeadline(time.Now().Add(3 * time.Second))
+	if _, err := io.ReadFull(r, got); err != nil || string(got) != "PIPELINED" {
+		t.Errorf("pipelined bytes lost: %q, %v", got, err)
 	}
 }

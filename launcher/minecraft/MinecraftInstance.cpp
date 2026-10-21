@@ -768,6 +768,13 @@ QStringList MinecraftInstance::processMinecraftArgs(AuthSessionPtr session, Mine
         }
     }
 
+    // With a relay, the game's own web requests (the login to join a server) go through a proxy on this computer.
+    // This is the game's own option; it does not affect the connection to the game server.
+    if (const quint16 proxyPort = APPLICATION->gameProxyPort()) {
+        args << "--proxyHost" << "127.0.0.1";
+        args << "--proxyPort" << QString::number(proxyPort);
+    }
+
     QMap<QString, QString> tokenMapping = makeProfileVarMapping(profile);
 
     // yggdrasil!

@@ -50,6 +50,9 @@ class RelayNetworkAccessManager : public QNetworkAccessManager {
     bool routesThroughRelay() const { return m_mode != Mode::Direct; }
     /** True when the relay configuration is usable. */
     bool relayReady() const { return m_mode == Mode::Relay; }
+    /** The relay address and token while relayReady(); empty otherwise. */
+    QUrl relayBase() const { return m_relayBase; }
+    QByteArray relayToken() const { return m_token; }
 
     /**
      * Compute the relay URL for a request URL.

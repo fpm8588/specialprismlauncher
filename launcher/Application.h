@@ -53,6 +53,7 @@
 
 class LaunchController;
 class LocalPeer;
+class LocalSocksProxy;
 class InstanceWindow;
 class MainWindow;
 class ViewLogWindow;
@@ -149,6 +150,9 @@ class Application : public QApplication {
 
     /// Re-read the relay settings (RelayURL / RelayToken, or PRISM_RELAY_URL / PRISM_RELAY_TOKEN) into the network manager.
     void updateRelaySettings();
+
+    /// Port of the local SOCKS proxy that carries the game's own login requests to the relay, or 0 when it is not running.
+    quint16 gameProxyPort() const;
 
     QNetworkAccessManager* network();
 
@@ -252,6 +256,7 @@ class Application : public QApplication {
     QDateTime m_startTime;
 
     std::unique_ptr<QNetworkAccessManager> m_network;
+    std::unique_ptr<LocalSocksProxy> m_gameProxy;
 
     std::unique_ptr<ExternalUpdater> m_updater;
     std::unique_ptr<AccountList> m_accounts;
